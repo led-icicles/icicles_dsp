@@ -15,7 +15,9 @@ dependencies:
   ffi: ^2.1.4
   hooks: ^2.1.0
   icicles_generators:
-    path: ../icicles_generators
+    git:
+      url: git@github.com:led-icicles/icicles_generators.git
+      ref: v0.6.0
   logging: ^1.3.0
   native_toolchain_rust: ^1.0.7
 
