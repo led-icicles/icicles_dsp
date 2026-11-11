@@ -1,0 +1,17 @@
+# Dart / Flutter
+.dart_tool/
+/build/
+/coverage/
+/pubspec.lock
+/example/pubspec.lock
+**/doc/api/
+*.iml
+.idea/
+.DS_Store
+
+# Rust
+/rust/target/
+
+# The full-accuracy beat model is downloaded, not committed (tool/download-models.sh).
+/models/beat_this.onnx
+/models/*.sha256

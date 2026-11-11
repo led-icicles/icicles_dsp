@@ -1,0 +1,14 @@
+name: icicles_dsp_example
+description: A command-line example that analyzes a WAV file with icicles_dsp and prints the BPM.
+version: 0.1.0
+publish_to: "none"
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  icicles_dsp:
+    path: ../
+
+dev_dependencies:
+  flutter_lints: ^6.0.0

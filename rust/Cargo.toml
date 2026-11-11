@@ -1,0 +1,32 @@
+[package]
+name = "icicles_dsp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Native audio analysis for icicles animations: Beat This! beat tracking and the icicles_generators feature matrix behind a C ABI."
+license = "MIT"
+repository = "https://github.com/led-icicles/icicles_dsp"
+publish = false
+
+[lib]
+name = "icicles_dsp"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+beat-this = { version = "1.1", default-features = false }
+rustfft = "6"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+strip = true
+panic = "unwind"
+
+# rten's float math is orders of magnitude slower unoptimized; keep the
+# dependencies optimized even in dev/test builds (the crate itself stays at the
+# debug opt-level for fast incremental builds).
+[profile.dev.package."*"]
+opt-level = 3
