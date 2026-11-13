@@ -1,3 +1,7 @@
+## 0.1.1
+
+- Depend on icicles_generators 0.7.0.
+
 ## 0.1.0
 
 - Rust crate `icicles_dsp` (cdylib + staticlib) built by the Dart build hook
