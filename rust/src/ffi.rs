@@ -1094,7 +1094,56 @@ pub unsafe extern "C" fn icicles_dsp_encode_vorbis(
     }
 }
 
-/// Releases a byte array returned by [`icicles_dsp_encode_vorbis`].
+/// Decodes the audio file `bytes` (`len` bytes: WAV, AIFF, FLAC, MP3, Ogg
+/// Vorbis, AAC/M4A) from `start` seconds for `length` seconds (`<= 0`: to
+/// the end) and encodes it as an Ogg Vorbis file at quality `quality`; the
+/// result and failures as in [`icicles_dsp_encode_vorbis`].
+///
+/// # Safety
+/// `bytes` must point to `len` readable bytes; `out` and `out_len` must be
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn icicles_dsp_transcode_vorbis(
+    bytes: *const u8,
+    len: usize,
+    start: f64,
+    length: f64,
+    quality: f32,
+    out: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out.is_null() || out_len.is_null() {
+        set_last_error("out is null");
+        return IciclesDspStatus::InvalidArgument as i32;
+    }
+    ptr::write(out, ptr::null_mut());
+    ptr::write(out_len, 0);
+    if bytes.is_null() || len == 0 {
+        set_last_error("no bytes");
+        return IciclesDspStatus::InvalidArgument as i32;
+    }
+    let file = std::slice::from_raw_parts(bytes, len);
+    match catch_unwind(AssertUnwindSafe(|| crate::encode::transcode_vorbis(file, start, length, quality))) {
+        Ok(Ok(encoded)) => {
+            let (pointer, length) = give_away(encoded);
+            ptr::write(out, pointer);
+            ptr::write(out_len, length);
+            set_last_error("");
+            IciclesDspStatus::Ok as i32
+        }
+        Ok(Err(error)) => {
+            set_last_error(format!("{error:#}"));
+            IciclesDspStatus::InvalidArgument as i32
+        }
+        Err(_) => {
+            set_last_error("panic while transcoding");
+            IciclesDspStatus::Panic as i32
+        }
+    }
+}
+
+/// Releases a byte array returned by [`icicles_dsp_encode_vorbis`] or
+/// [`icicles_dsp_transcode_vorbis`].
 ///
 /// # Safety
 /// `pointer`/`len` must come from that call and not have been freed.

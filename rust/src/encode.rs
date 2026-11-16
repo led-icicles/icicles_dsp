@@ -93,6 +93,14 @@ pub fn encode_vorbis(interleaved: &[f32], channels: usize, sample_rate: u32, qua
     Ok(out)
 }
 
+/// The audio file `bytes` (any format [`crate::decode::decode_audio`]
+/// reads) from `start` seconds for `length` seconds (`<= 0`: to the end)
+/// as an Ogg Vorbis file at quality `quality`.
+pub fn transcode_vorbis(bytes: &[u8], start: f64, length: f64, quality: f32) -> Result<Vec<u8>> {
+    let pcm = crate::decode::decode_audio(bytes, start, length)?;
+    encode_vorbis(&pcm.samples, pcm.channels, pcm.sample_rate, quality)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +146,16 @@ mod tests {
         let (frames, _, rate, channels) = decode(&encode_vorbis(&pcm, 1, 48_000, 3.0).unwrap());
         assert_eq!((rate, channels), (48_000, 2), "mono is written as stereo");
         assert!(frames.abs_diff(48_000) < 2048);
+    }
+
+    #[test]
+    fn transcodes_a_wav_span() {
+        let wav = crate::decode::tests::wav(44_100 * 3, 2, 44_100);
+        let bytes = transcode_vorbis(&wav, 1.0, 1.5, 5.0).unwrap();
+        let (frames, _, rate, channels) = decode(&bytes);
+        assert_eq!((rate, channels), (44_100, 2));
+        assert!(frames.abs_diff(66_150) < 2048, "decoded {frames} frames");
+        assert!(bytes.len() < wav.len() / 4);
     }
 
     #[test]

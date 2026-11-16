@@ -99,6 +99,16 @@ final class IciclesDspWasm {
     if (interleaved.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
     return _Instance(this).encodeVorbis(interleaved, channels, sampleRate, quality);
   }
+
+  /// The audio file [bytes] from [start] for [length] (null: to the end)
+  /// re-encoded as an Ogg Vorbis file — byte-identical to the desktop
+  /// `IciclesDsp.transcodeVorbis`. Synchronous: call it on a Web Worker.
+  /// Throws [DspException].
+  Uint8List transcodeVorbis(Uint8List bytes, {Duration start = Duration.zero, Duration? length, double quality = 5}) {
+    if (bytes.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The file is empty.');
+    double seconds(Duration d) => d.inMicroseconds / Duration.microsecondsPerSecond;
+    return _Instance(this).transcodeVorbis(bytes, seconds(start), length == null ? 0 : seconds(length), quality);
+  }
 }
 
 /// One instantiation of the module with its WASI shim.
@@ -161,14 +171,26 @@ final class _Instance {
     return _read(out);
   }
 
-  Uint8List encodeVorbis(Float32List interleaved, int channels, int sampleRate, double quality) {
+  Uint8List encodeVorbis(Float32List interleaved, int channels, int sampleRate, double quality) => _encoded(() {
+        final samples = _put(interleaved.buffer.asUint8List(interleaved.offsetInBytes, interleaved.lengthInBytes));
+        // The out pointer and length (u32 each on wasm32).
+        final out = _u32(_exports.alloc(8));
+        return (_exports.encodeVorbis(samples, interleaved.length, channels, sampleRate, quality, out, out + 4), out);
+      });
+
+  Uint8List transcodeVorbis(Uint8List bytes, double start, double length, double quality) => _encoded(() {
+        final file = _put(bytes);
+        final out = _u32(_exports.alloc(8));
+        return (_exports.transcodeVorbis(file, bytes.length, start, length, quality, out, out + 4), out);
+      });
+
+  /// Runs [call] (returning the status and the out pointer/length pair) and
+  /// copies the encoded file out.
+  Uint8List _encoded((int, int) Function() call) {
     final int status;
     final int out;
     try {
-      final samples = _put(interleaved.buffer.asUint8List(interleaved.offsetInBytes, interleaved.lengthInBytes));
-      // The out pointer and length (u32 each on wasm32).
-      out = _u32(_exports.alloc(8));
-      status = _exports.encodeVorbis(samples, interleaved.length, channels, sampleRate, quality, out, out + 4);
+      (status, out) = call();
     } on DspException {
       rethrow;
     } catch (error) {
@@ -424,6 +446,10 @@ extension type _Exports._(JSObject _) implements JSObject {
 
   @JS('icicles_dsp_encode_vorbis')
   external int encodeVorbis(int samples, int length, int channels, int sampleRate, double quality, int out, int outLength);
+
+  @JS('icicles_dsp_transcode_vorbis')
+  external int transcodeVorbis(
+      int bytes, int length, double start, double seconds, double quality, int out, int outLength);
 
   @JS('icicles_dsp_analyze_models')
   external int analyzeModels(

@@ -21,7 +21,7 @@ void main() {
 
   test('the native library loads', () {
     expect(IciclesDsp.isAvailable, isTrue);
-    expect(IciclesDsp.version, '0.6.0');
+    expect(IciclesDsp.version, '0.7.0');
   });
 
   test('bundled models resolve to the package models directory', () {

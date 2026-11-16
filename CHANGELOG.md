@@ -1,3 +1,10 @@
+## 0.7.0
+
+- Audio transcoding: `IciclesDsp().transcodeVorbis(bytes, {start, length, quality})` / `transcodeVorbisSync` and
+  `IciclesDspWasm.transcodeVorbis`, byte-identical; C ABI `icicles_dsp_transcode_vorbis`. Decodes WAV, AIFF, FLAC,
+  MP3, Ogg Vorbis and AAC/M4A (`symphonia`, pure Rust; `decode.rs`), cuts the span and encodes it like
+  `encodeVorbis` — stereo kept (more channels keep the first two), the file's own sample rate.
+
 ## 0.6.0
 
 - Ogg Vorbis encoding: `IciclesDsp().encodeVorbis` / `encodeVorbisSync` (FFI, background isolate) and

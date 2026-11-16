@@ -270,6 +270,59 @@ final class IciclesDsp {
     }
   }
 
+  /// The audio file [bytes] (WAV, AIFF, FLAC, MP3, Ogg Vorbis, AAC/M4A)
+  /// from [start] for [length] (null: to the end) re-encoded as an Ogg
+  /// Vorbis file at quality [quality], decoded and encoded on a background
+  /// isolate. Byte-identical to `IciclesDspWasm.transcodeVorbis`.
+  ///
+  /// Throws [DspException] (`invalidArgument` for an unreadable file).
+  Future<Uint8List> transcodeVorbis(
+    Uint8List bytes, {
+    Duration start = Duration.zero,
+    Duration? length,
+    double quality = defaultVorbisQuality,
+  }) {
+    final transfer = TransferableTypedData.fromList([bytes]);
+    return Isolate.run(() => transcodeVorbisSync(transfer.materialize().asUint8List(),
+        start: start, length: length, quality: quality));
+  }
+
+  /// The synchronous native call behind [transcodeVorbis].
+  static Uint8List transcodeVorbisSync(
+    Uint8List bytes, {
+    Duration start = Duration.zero,
+    Duration? length,
+    double quality = defaultVorbisQuality,
+  }) {
+    if (bytes.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The file is empty.');
+    final file = calloc<ffi.Uint8>(bytes.length);
+    final out = calloc<ffi.Pointer<ffi.Uint8>>();
+    final outLength = calloc<ffi.Size>();
+    try {
+      file.asTypedList(bytes.length).setAll(0, bytes);
+      final int status;
+      try {
+        status = bindings.icicles_dsp_transcode_vorbis(file, bytes.length, _seconds(start),
+            length == null ? 0 : _seconds(length), quality, out, outLength);
+      } on Error catch (e) {
+        throw DspException(DspErrorKind.libraryUnavailable, 'The icicles_dsp native library is not available: $e');
+      }
+      if (status != bindings.IciclesDspStatus.ICICLES_DSP_OK.value) {
+        final message = bindings.icicles_dsp_last_error().cast<Utf8>().toDartString();
+        throw DspException(dspErrorKindOf(status), message.isEmpty ? 'Native status $status.' : message);
+      }
+      final encoded = Uint8List.fromList(out.value.asTypedList(outLength.value));
+      bindings.icicles_dsp_free_bytes(out.value, outLength.value);
+      return encoded;
+    } finally {
+      calloc.free(file);
+      calloc.free(out);
+      calloc.free(outLength);
+    }
+  }
+
+  static double _seconds(Duration d) => d.inMicroseconds / Duration.microsecondsPerSecond;
+
   /// The deep analysis of [mono] PCM at [sampleRate] on a background
   /// isolate: Demucs stems → per-stem loudness, harmonic chroma, the drum
   /// hits of the drum stem and the All-In-One song structure, with [folds] of

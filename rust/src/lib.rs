@@ -14,6 +14,7 @@
 //! directly as well.
 
 pub mod beats;
+pub mod decode;
 pub mod deep;
 pub mod demucs;
 pub mod drums;

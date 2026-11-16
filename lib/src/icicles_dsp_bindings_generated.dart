@@ -117,7 +117,33 @@ external int icicles_dsp_encode_vorbis(
   ffi.Pointer<ffi.Size> out_len,
 );
 
-/// Releases a byte array of icicles_dsp_encode_vorbis.
+/// Decodes the audio file `bytes` (`len` bytes: WAV, AIFF, FLAC, MP3, Ogg
+/// Vorbis, AAC/M4A) from `start` seconds for `length` seconds (<= 0: to the
+/// end) and encodes it as an Ogg Vorbis file at quality `quality`; result and
+/// failures as in icicles_dsp_encode_vorbis.
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Double,
+    ffi.Double,
+    ffi.Float,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int icicles_dsp_transcode_vorbis(
+  ffi.Pointer<ffi.Uint8> bytes,
+  int len,
+  double start,
+  double length,
+  double quality,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> out,
+  ffi.Pointer<ffi.Size> out_len,
+);
+
+/// Releases a byte array of icicles_dsp_encode_vorbis or
+/// icicles_dsp_transcode_vorbis.
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.Size)>()
 external void icicles_dsp_free_bytes(ffi.Pointer<ffi.Uint8> pointer, int len);
 

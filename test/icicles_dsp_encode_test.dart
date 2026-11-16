@@ -50,4 +50,17 @@ void main() {
     expect(() => IciclesDsp.encodeVorbisSync(Float32List(0), channels: 1, sampleRate: 48000),
         throwsA(isA<DspException>()));
   });
+
+  test('transcodes a span of an audio file to Ogg Vorbis', () async {
+    final wav = wav16(clickTrack(bpm: 120, seconds: 3, sampleRate: 44100), 44100);
+    final ogg = await const IciclesDsp()
+        .transcodeVorbis(wav, start: const Duration(milliseconds: 500), length: const Duration(seconds: 2));
+    expect(ascii.decode(ogg.sublist(0, 4)), 'OggS');
+    expect(ogg.length, lessThan(wav.length ~/ 4));
+    final reference =
+        jsonDecode(File('test/fixtures/transcode_reference.json').readAsStringSync()) as Map<String, Object?>;
+    expect({'length': ogg.length, 'fnv': fnv(ogg)}, reference);
+    expect(() => IciclesDsp.transcodeVorbisSync(Uint8List.fromList([1, 2, 3])),
+        throwsA(isA<DspException>().having((e) => e.kind, 'kind', DspErrorKind.invalidArgument)));
+  });
 }

@@ -151,4 +151,17 @@ void main() {
     }
     expect({'length': ogg.length, 'fnv': h.toRadixString(16).padLeft(8, '0')}, reference);
   });
+
+  test('transcodes to Ogg Vorbis byte for byte like the native build', () async {
+    final reference =
+        jsonDecode(utf8.decode(await packageFile('test/fixtures/transcode_reference.json'))) as Map<String, Object?>;
+    final wav = wav16(clickTrack(bpm: 120, seconds: 3, sampleRate: 44100), 44100);
+    final ogg = dsp.transcodeVorbis(wav, start: const Duration(milliseconds: 500), length: const Duration(seconds: 2));
+    var h = 0x811c9dc5;
+    for (final b in ogg) {
+      final x = h ^ b;
+      h = ((x & 0xffff) * 0x01000193 + (((x >> 16) * 0x0193 & 0xffff) << 16)) & 0xffffffff;
+    }
+    expect({'length': ogg.length, 'fnv': h.toRadixString(16).padLeft(8, '0')}, reference);
+  });
 }

@@ -111,7 +111,15 @@ void icicles_dsp_dealloc(uint8_t *pointer, size_t len);
 int32_t icicles_dsp_encode_vorbis(const float *samples, size_t len, uint32_t channels, uint32_t sample_rate,
                                   float quality, uint8_t **out, size_t *out_len);
 
-// Releases a byte array of icicles_dsp_encode_vorbis.
+// Decodes the audio file `bytes` (`len` bytes: WAV, AIFF, FLAC, MP3, Ogg
+// Vorbis, AAC/M4A) from `start` seconds for `length` seconds (<= 0: to the
+// end) and encodes it as an Ogg Vorbis file at quality `quality`; result and
+// failures as in icicles_dsp_encode_vorbis.
+int32_t icicles_dsp_transcode_vorbis(const uint8_t *bytes, size_t len, double start, double length, float quality,
+                                     uint8_t **out, size_t *out_len);
+
+// Releases a byte array of icicles_dsp_encode_vorbis or
+// icicles_dsp_transcode_vorbis.
 void icicles_dsp_free_bytes(uint8_t *pointer, size_t len);
 
 // Releases the arrays of a result filled by icicles_dsp_analyze and zeroes it.
