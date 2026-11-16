@@ -48,6 +48,49 @@ external int icicles_dsp_analyze(
   ffi.Pointer<IciclesDspResult> out,
 );
 
+/// Like icicles_dsp_analyze, with the models given as bytes instead of a
+/// directory (the browser build has no file system): `mel`/`beat` for
+/// ICICLES_DSP_TRACK_BEATS, `drum` for ICICLES_DSP_DETECT_DRUMS (a NULL `drum`
+/// fails only the drum detection, reported in the result). A NULL `mel` or
+/// `beat` computes the features only, whatever the flags.
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Float>,
+    ffi.Size,
+    ffi.Uint32,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint32,
+    ffi.Pointer<IciclesDspResult>,
+  )
+>()
+external int icicles_dsp_analyze_models(
+  ffi.Pointer<ffi.Float> samples,
+  int len,
+  int sample_rate,
+  ffi.Pointer<ffi.Uint8> mel,
+  int mel_len,
+  ffi.Pointer<ffi.Uint8> beat,
+  int beat_len,
+  ffi.Pointer<ffi.Uint8> drum,
+  int drum_len,
+  int flags,
+  ffi.Pointer<IciclesDspResult> out,
+);
+
+/// Allocates `len` bytes (8-aligned) in the library's memory, for a host that
+/// has to write the PCM and models there (the browser); NULL for len 0.
+@ffi.Native<ffi.Pointer<ffi.Uint8> Function(ffi.Size)>()
+external ffi.Pointer<ffi.Uint8> icicles_dsp_alloc(int len);
+
+/// Releases a block of icicles_dsp_alloc (with the same `len`).
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.Size)>()
+external void icicles_dsp_dealloc(ffi.Pointer<ffi.Uint8> pointer, int len);
+
 /// Releases the arrays of a result filled by icicles_dsp_analyze and zeroes it.
 /// NULL and already-freed results are no-ops.
 @ffi.Native<ffi.Void Function(ffi.Pointer<IciclesDspResult>)>()

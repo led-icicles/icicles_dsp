@@ -8,13 +8,16 @@
 //! - [`drums`]: drum hits (kick, snare, toms, hi-hat, cymbals) with the ADTOF
 //!   model on the same runtime.
 //!
-//! [`ffi`] exposes both behind a C ABI for `dart:ffi`; the Rust API is usable
+//! [`ffi`] exposes them behind a C ABI — for `dart:ffi` on the desktop and
+//! for the browser through the `wasm32-unknown-unknown` build, where the
+//! models arrive as bytes ([`model::ModelSource`]); the Rust API is usable
 //! directly as well.
 
 pub mod beats;
 pub mod drums;
 pub mod features;
 pub mod ffi;
+pub mod model;
 
 /// The crate version, also returned by `icicles_dsp_version()`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

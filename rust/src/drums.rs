@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use beat_this::{Model, RtenRuntime, Runtime, Tensor};
+use beat_this::{Model, Tensor};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
     Async, FixedAsync, Resampler, SincInterpolationParameters, SincInterpolationType,
@@ -26,6 +26,8 @@ use rubato::{
 };
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
+
+use crate::model::{ModelSource, OnnxModel};
 
 /// File name of the drum model.
 pub const DRUM_MODEL_FILE: &str = "adtof_frame_rnn.onnx";
@@ -124,16 +126,23 @@ pub fn resolve_model(model_dir: &Path) -> Result<PathBuf, DrumError> {
 }
 
 /// Detects the drum hits of mono PCM (`-1..1`) at `sample_rate` Hz with the
-/// model in `model_dir`. Hits are sorted by time.
+/// drum model of `models` (in the directory, or its bytes). Hits are sorted
+/// by time.
 pub fn detect(
     samples: &[f32],
     sample_rate: u32,
-    model_dir: &Path,
+    models: ModelSource<'_>,
 ) -> Result<Vec<DrumHit>, DrumError> {
-    let path = resolve_model(model_dir)?;
-    let mut model = RtenRuntime
-        .load_model(&path)
-        .map_err(|e| DrumError::ModelLoad(format!("{e:#}")))?;
+    let load = |e: anyhow::Error| DrumError::ModelLoad(format!("{e:#}"));
+    let mut model = match models {
+        ModelSource::Dir(dir) => OnnxModel::from_file(&resolve_model(dir)?).map_err(load)?,
+        ModelSource::Bytes {
+            drum: Some(bytes), ..
+        } => OnnxModel::from_bytes(bytes).map_err(load)?,
+        ModelSource::Bytes { drum: None, .. } => {
+            return Err(DrumError::ModelNotFound(PathBuf::from(DRUM_MODEL_FILE)))
+        }
+    };
     let audio = resample(samples, sample_rate).map_err(DrumError::Analysis)?;
     let front = FrontEnd::new();
     let (spec, linear) = front.spectrogram(&audio);

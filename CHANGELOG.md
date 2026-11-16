@@ -1,3 +1,14 @@
+## 0.3.0
+
+- Browser build: `tool/build_wasm.sh` compiles the crate to `wasm32-wasip1` with SIMD;
+  `package:icicles_dsp/icicles_dsp_web.dart` (`IciclesDspWasm`) runs it with the models as bytes and a minimal WASI
+  shim, one fresh instance per analysis. Results equal the FFI build (`test/web/`, Chrome with dart2js and dart2wasm).
+- C ABI: `icicles_dsp_analyze_models` (models as bytes), `icicles_dsp_alloc` / `icicles_dsp_dealloc`.
+- Rust: `model::OnnxModel` (rten, from a file or bytes) and `model::ModelSource` (`Dir` / `Bytes`) for
+  `beats::track` and `drums::detect`.
+- Dart: `package:icicles_dsp/icicles_dsp_types.dart` (platform-neutral types) and `DspResultData` (the raw result
+  arrays, shared by the FFI and WebAssembly paths).
+
 ## 0.2.1
 
 - Depends on `icicles_generators` v0.9.0.

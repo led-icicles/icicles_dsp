@@ -14,6 +14,7 @@ use std::ptr;
 use crate::beats::{self, BeatError};
 use crate::drums::{self, DrumError};
 use crate::features::{self, FeatureError, COLUMN_COUNT, HOP_MICROS};
+use crate::model::ModelSource;
 
 /// Status codes returned by [`icicles_dsp_analyze`].
 #[repr(i32)]
@@ -172,9 +173,92 @@ pub unsafe extern "C" fn icicles_dsp_analyze(
         return IciclesDspStatus::InvalidArgument as i32;
     }
     ptr::write(out, IciclesDspResult::EMPTY);
-    let outcome = catch_unwind(AssertUnwindSafe(|| {
-        analyze_checked(samples, len, sample_rate, model_dir, flags)
-    }));
+    finish(
+        catch_unwind(AssertUnwindSafe(|| {
+            analyze_checked(samples, len, sample_rate, model_dir, flags)
+        })),
+        out,
+    )
+}
+
+/// Like [`icicles_dsp_analyze`], with the models given as bytes instead of a
+/// directory (the browser build has no file system): `mel`/`beat` are needed
+/// with [`ICICLES_DSP_TRACK_BEATS`], `drum` with [`ICICLES_DSP_DETECT_DRUMS`]
+/// (a NULL `drum` fails only the drum detection, reported in the result).
+/// A NULL `mel` or `beat` computes the features only, whatever the flags.
+///
+/// # Safety
+/// As [`icicles_dsp_analyze`]; each non-NULL model pointer must point to its
+/// length of readable bytes.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn icicles_dsp_analyze_models(
+    samples: *const f32,
+    len: usize,
+    sample_rate: u32,
+    mel: *const u8,
+    mel_len: usize,
+    beat: *const u8,
+    beat_len: usize,
+    drum: *const u8,
+    drum_len: usize,
+    flags: u32,
+    out: *mut IciclesDspResult,
+) -> i32 {
+    if out.is_null() {
+        set_last_error("out is null");
+        return IciclesDspStatus::InvalidArgument as i32;
+    }
+    ptr::write(out, IciclesDspResult::EMPTY);
+    finish(
+        catch_unwind(AssertUnwindSafe(|| {
+            let bytes = |pointer: *const u8, len: usize| {
+                (!pointer.is_null() && len > 0).then(|| std::slice::from_raw_parts(pointer, len))
+            };
+            let models = match (bytes(mel, mel_len), bytes(beat, beat_len)) {
+                (Some(mel), Some(beat)) => Some(ModelSource::Bytes {
+                    mel,
+                    beat,
+                    drum: bytes(drum, drum_len),
+                }),
+                _ => None,
+            };
+            let signal = checked_signal(samples, len, sample_rate)?;
+            analyze(signal, sample_rate, models, flags)
+        })),
+        out,
+    )
+}
+
+/// Allocates `len` bytes (8-aligned) for a caller that has to write into the
+/// library's memory (the browser host: PCM and models); release with
+/// [`icicles_dsp_dealloc`] and the same `len`. NULL for `len == 0`.
+#[no_mangle]
+pub extern "C" fn icicles_dsp_alloc(len: usize) -> *mut u8 {
+    match std::alloc::Layout::from_size_align(len, 8) {
+        Ok(layout) if len > 0 => unsafe { std::alloc::alloc(layout) },
+        _ => ptr::null_mut(),
+    }
+}
+
+/// Releases a block of [`icicles_dsp_alloc`].
+///
+/// # Safety
+/// `pointer` must be NULL or come from `icicles_dsp_alloc(len)`, not freed.
+#[no_mangle]
+pub unsafe extern "C" fn icicles_dsp_dealloc(pointer: *mut u8, len: usize) {
+    if pointer.is_null() || len == 0 {
+        return;
+    }
+    if let Ok(layout) = std::alloc::Layout::from_size_align(len, 8) {
+        std::alloc::dealloc(pointer, layout);
+    }
+}
+
+type Outcome = std::thread::Result<Result<IciclesDspResult, Failure>>;
+
+/// Writes a caught analysis outcome to `out` and returns its status.
+unsafe fn finish(outcome: Outcome, out: *mut IciclesDspResult) -> i32 {
     match outcome {
         Ok(Ok(result)) => {
             set_last_error("");
@@ -206,6 +290,32 @@ unsafe fn analyze_checked(
     model_dir: *const c_char,
     flags: u32,
 ) -> Result<IciclesDspResult, Failure> {
+    let signal = checked_signal(samples, len, sample_rate)?;
+    let model_dir = if model_dir.is_null() {
+        None
+    } else {
+        let raw = CStr::from_ptr(model_dir).to_str().map_err(|_| {
+            (
+                IciclesDspStatus::InvalidArgument,
+                "model_dir is not UTF-8".to_string(),
+            )
+        })?;
+        Some(Path::new(raw).to_path_buf())
+    };
+    analyze(
+        signal,
+        sample_rate,
+        model_dir.as_deref().map(ModelSource::Dir),
+        flags,
+    )
+}
+
+/// The validated signal of an entry point.
+unsafe fn checked_signal<'a>(
+    samples: *const f32,
+    len: usize,
+    sample_rate: u32,
+) -> Result<&'a [f32], Failure> {
     if samples.is_null() {
         return Err((IciclesDspStatus::InvalidArgument, "samples is null".into()));
     }
@@ -221,31 +331,19 @@ unsafe fn analyze_checked(
             FeatureError::SampleRateTooLow(sample_rate).to_string(),
         ));
     }
-    let model_dir = if model_dir.is_null() {
-        None
-    } else {
-        let raw = CStr::from_ptr(model_dir).to_str().map_err(|_| {
-            (
-                IciclesDspStatus::InvalidArgument,
-                "model_dir is not UTF-8".to_string(),
-            )
-        })?;
-        Some(Path::new(raw).to_path_buf())
-    };
-    let signal = std::slice::from_raw_parts(samples, len);
-    analyze(signal, sample_rate, model_dir.as_deref(), flags)
+    Ok(std::slice::from_raw_parts(samples, len))
 }
 
 fn analyze(
     signal: &[f32],
     sample_rate: u32,
-    model_dir: Option<&Path>,
+    models: Option<ModelSource<'_>>,
     flags: u32,
 ) -> Result<IciclesDspResult, Failure> {
     let features = features::extract(signal, sample_rate)
         .map_err(|e| (IciclesDspStatus::InvalidArgument, e.to_string()))?;
-    let beats = match model_dir.filter(|_| flags & ICICLES_DSP_TRACK_BEATS != 0) {
-        Some(dir) => beats::track(signal, sample_rate, dir).map_err(|e| {
+    let beats = match models.filter(|_| flags & ICICLES_DSP_TRACK_BEATS != 0) {
+        Some(models) => beats::track(signal, sample_rate, models).map_err(|e| {
             let status = match e {
                 BeatError::ModelNotFound(_) => IciclesDspStatus::ModelNotFound,
                 BeatError::ModelLoad(_) => IciclesDspStatus::ModelLoadFailed,
@@ -255,11 +353,11 @@ fn analyze(
         })?,
         None => beats::Beats::default(),
     };
-    let (drum_hits, drum_status, drum_error) = match model_dir
+    let (drum_hits, drum_status, drum_error) = match models
         .filter(|_| flags & ICICLES_DSP_DETECT_DRUMS != 0)
     {
         None => (Vec::new(), IciclesDspStatus::Ok, ptr::null_mut()),
-        Some(dir) => match drums::detect(signal, sample_rate, dir) {
+        Some(models) => match drums::detect(signal, sample_rate, models) {
             Ok(hits) => (hits, IciclesDspStatus::Ok, ptr::null_mut()),
             Err(e) => {
                 let status = match e {

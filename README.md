@@ -20,8 +20,31 @@ mono PCM signal into
 The crate lives in `rust/` and is built by the Dart build hook
 (`hook/build.dart`, [`native_toolchain_rust`](https://pub.dev/packages/native_toolchain_rust)),
 so `dart run`, `dart test`, `flutter test`, `flutter run` and `flutter build`
-compile and bundle it; nothing is prebuilt. Native only (macOS, Windows): do
-not import the package on the web.
+compile and bundle it; nothing is prebuilt.
+
+Three libraries:
+
+- `package:icicles_dsp/icicles_dsp.dart` — `IciclesDsp` over `dart:ffi`
+  (macOS, Windows); do not import it on the web.
+- `package:icicles_dsp/icicles_dsp_web.dart` — `IciclesDspWasm`, the same crate
+  compiled to WebAssembly (`tool/build_wasm.sh` → `build/web/icicles_dsp.wasm`)
+  for the browser, the models passed as bytes. Same results as the FFI build
+  (pinned by `test/web/`). Single-threaded and synchronous: run it on a Web
+  Worker (a 3-minute song with the full beat model takes ~30 s and ~600 MB of
+  module memory, released after each call).
+- `package:icicles_dsp/icicles_dsp_types.dart` — the platform-neutral types
+  (`DspAnalysis`, `DspException`, `DspResultData`).
+
+### Browser build
+
+`tool/build_wasm.sh` builds `wasm32-wasip1` with SIMD (`-C target-feature=+simd128`;
+`wasm-opt -O3` when installed). wasip1 rather than `wasm32-unknown-unknown`:
+`beat-this` times its stages with `std::time::Instant`, which panics without a
+clock import there. The module imports only WASI preview 1 calls;
+`IciclesDspWasm` provides the clock, `crypto.getRandomValues` and stderr
+(collected into the panic message) and answers the file system calls with
+"no such file". A Rust panic aborts in WebAssembly (no unwinding), so every
+analysis runs on a fresh instance of the compiled module.
 
 ## Usage
 
@@ -158,6 +181,11 @@ model); the beat model runs on 30 s chunks, so short signals are fine.
   `drum_error`.
 - `const char *icicles_dsp_last_error(void)` — message of the last failure on
   the calling thread.
+- `int32_t icicles_dsp_analyze_models(samples, len, sample_rate, mel, mel_len, beat, beat_len, drum, drum_len, flags, out)`
+  — the same with the models as bytes (the browser build); NULL `mel`/`beat` =
+  features only, NULL `drum` fails only the drum detection.
+- `uint8_t *icicles_dsp_alloc(size_t len)` / `void icicles_dsp_dealloc(uint8_t *, size_t len)`
+  — memory inside the library for a host that writes the PCM and models there.
 - `void icicles_dsp_free(IciclesDspResult *out)` — releases the arrays.
 
 Every entry point is wrapped in `catch_unwind`; a panic becomes status 5 and
@@ -175,6 +203,10 @@ the library stays usable.
   the timing of a 3-minute signal.
 - `dart test` or `flutter test` — the Dart facade on a generated WAV (the hook
   builds the crate first).
+- `tool/build_wasm.sh && dart test -p chrome test/web/` (also `-c dart2wasm`) —
+  the WebAssembly build reproduces the FFI analysis of a click track
+  (`test/fixtures/click_120_reference.json`, written by
+  `dart run tool/dump_reference_analysis.dart`).
 
 ## Performance
 

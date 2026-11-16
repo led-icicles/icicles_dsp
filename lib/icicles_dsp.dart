@@ -5,7 +5,8 @@
 /// and downbeats plus the `icicles_generators` `AudioFeatures` matrix, computed
 /// with the same arithmetic as the Dart `AudioFeatureExtractor`.
 ///
-/// Native only (macOS, Windows); do not import this package on the web.
+/// Native only (macOS, Windows); do not import this library on the web — the
+/// browser build is `package:icicles_dsp/icicles_dsp_web.dart`.
 library;
 
 export 'package:icicles_generators/icicles_generators.dart'

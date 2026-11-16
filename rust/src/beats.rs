@@ -8,7 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use beat_this::{BeatThis, RtenRuntime};
+use beat_this::BeatThis;
+
+use crate::model::{ModelSource, OnnxModel};
 
 /// File name of the mel spectrogram front end.
 pub const MEL_MODEL_FILE: &str = "mel_spectrogram.onnx";
@@ -65,12 +67,29 @@ pub fn resolve_models(model_dir: &Path) -> Result<(PathBuf, PathBuf), BeatError>
 }
 
 /// Tracks the beats of mono PCM (`-1..1`) at `sample_rate` Hz with the
-/// models in `model_dir`. Any sample rate works (the crate resamples to
-/// 22 050 Hz).
-pub fn track(samples: &[f32], sample_rate: u32, model_dir: &Path) -> Result<Beats, BeatError> {
-    let (mel, beat) = resolve_models(model_dir)?;
-    let mut tracker = BeatThis::new(&RtenRuntime, &mel, &beat)
-        .map_err(|e| BeatError::ModelLoad(format!("{e:#}")))?;
+/// models of `models` (a directory resolved by [`resolve_models`], or the
+/// mel and beat models' bytes). Any sample rate works (the crate resamples
+/// to 22 050 Hz).
+pub fn track(
+    samples: &[f32],
+    sample_rate: u32,
+    models: ModelSource<'_>,
+) -> Result<Beats, BeatError> {
+    let load = |e: anyhow::Error| BeatError::ModelLoad(format!("{e:#}"));
+    let (mel, beat) = match models {
+        ModelSource::Dir(dir) => {
+            let (mel, beat) = resolve_models(dir)?;
+            (
+                OnnxModel::from_file(&mel).map_err(load)?,
+                OnnxModel::from_file(&beat).map_err(load)?,
+            )
+        }
+        ModelSource::Bytes { mel, beat, .. } => (
+            OnnxModel::from_bytes(mel).map_err(load)?,
+            OnnxModel::from_bytes(beat).map_err(load)?,
+        ),
+    };
+    let mut tracker = BeatThis::from_models(mel, beat);
     let analysis = tracker
         .analyze_audio(samples, sample_rate)
         .map_err(|e| BeatError::Analysis(format!("{e:#}")))?;

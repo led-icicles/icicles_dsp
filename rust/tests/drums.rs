@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use beat_this::{RtenRuntime, Runtime};
 use icicles_dsp::drums::{activations, detect, resolve_model, DrumClass, FrontEnd, CLASS_COUNT};
+use icicles_dsp::model::ModelSource;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -73,7 +74,7 @@ fn spectrogram_and_activations_match_the_reference() {
 #[test]
 fn loop_hits_land_on_the_pattern() {
     let (_, pcm) = load();
-    let hits = detect(&pcm, 44_100, &common::model_dir()).unwrap();
+    let hits = detect(&pcm, 44_100, ModelSource::Dir(&common::model_dir())).unwrap();
     let times = |class: DrumClass| -> Vec<f32> {
         hits.iter()
             .filter(|h| h.class == class)
@@ -113,7 +114,7 @@ fn resampled_input_gives_the_same_hits() {
         })
         .collect();
     let started = Instant::now();
-    let hits = detect(&resampled, 48_000, &common::model_dir()).unwrap();
+    let hits = detect(&resampled, 48_000, ModelSource::Dir(&common::model_dir())).unwrap();
     eprintln!("48 kHz detection: {:?}", started.elapsed());
     let kicks: Vec<f32> = hits
         .iter()
@@ -128,6 +129,11 @@ fn resampled_input_gives_the_same_hits() {
 
 #[test]
 fn missing_model_is_reported() {
-    let err = detect(&[0.0; 4410], 44_100, std::path::Path::new("/nonexistent")).unwrap_err();
+    let err = detect(
+        &[0.0; 4410],
+        44_100,
+        ModelSource::Dir(std::path::Path::new("/nonexistent")),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("adtof_frame_rnn.onnx"), "{err}");
 }

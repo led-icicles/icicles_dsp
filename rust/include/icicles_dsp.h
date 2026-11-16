@@ -85,6 +85,22 @@ const char *icicles_dsp_last_error(void);
 int32_t icicles_dsp_analyze(const float *samples, size_t len, uint32_t sample_rate, const char *model_dir,
                             uint32_t flags, IciclesDspResult *out);
 
+// Like icicles_dsp_analyze, with the models given as bytes instead of a
+// directory (the browser build has no file system): `mel`/`beat` for
+// ICICLES_DSP_TRACK_BEATS, `drum` for ICICLES_DSP_DETECT_DRUMS (a NULL `drum`
+// fails only the drum detection, reported in the result). A NULL `mel` or
+// `beat` computes the features only, whatever the flags.
+int32_t icicles_dsp_analyze_models(const float *samples, size_t len, uint32_t sample_rate, const uint8_t *mel,
+                                   size_t mel_len, const uint8_t *beat, size_t beat_len, const uint8_t *drum,
+                                   size_t drum_len, uint32_t flags, IciclesDspResult *out);
+
+// Allocates `len` bytes (8-aligned) in the library's memory, for a host that
+// has to write the PCM and models there (the browser); NULL for len 0.
+uint8_t *icicles_dsp_alloc(size_t len);
+
+// Releases a block of icicles_dsp_alloc (with the same `len`).
+void icicles_dsp_dealloc(uint8_t *pointer, size_t len);
+
 // Releases the arrays of a result filled by icicles_dsp_analyze and zeroes it.
 // NULL and already-freed results are no-ops.
 void icicles_dsp_free(IciclesDspResult *out);

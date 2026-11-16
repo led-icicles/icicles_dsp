@@ -6,4 +6,6 @@ targets = [
   "x86_64-apple-darwin",
   "aarch64-pc-windows-msvc",
   "x86_64-pc-windows-msvc",
+  # The browser build (tool/build_wasm.sh).
+  "wasm32-wasip1",
 ]

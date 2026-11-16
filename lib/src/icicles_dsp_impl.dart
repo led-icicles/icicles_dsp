@@ -5,9 +5,9 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
-import 'package:icicles_generators/icicles_generators.dart';
 
 import 'dsp_analysis.dart';
+import 'dsp_result_data.dart';
 import 'dsp_exception.dart';
 import 'icicles_dsp_bindings_generated.dart' as bindings;
 
@@ -154,8 +154,7 @@ final class IciclesDsp {
     bool trackBeats = true,
     bool detectDrums = true,
   }) {
-    final flags =
-        (trackBeats ? bindings.ICICLES_DSP_TRACK_BEATS : 0) | (detectDrums ? bindings.ICICLES_DSP_DETECT_DRUMS : 0);
+    final flags = dspFlags(trackBeats: trackBeats, detectDrums: detectDrums);
     final samples = calloc<ffi.Float>(mono.length);
     final out = calloc<bindings.IciclesDspResult>();
     final path = modelDir?.toNativeUtf8() ?? ffi.nullptr;
@@ -169,23 +168,25 @@ final class IciclesDsp {
       }
       if (status != bindings.IciclesDspStatus.ICICLES_DSP_OK.value) {
         final message = bindings.icicles_dsp_last_error().cast<Utf8>().toDartString();
-        throw DspException(_kindOf(status), message.isEmpty ? 'Native status $status.' : message);
+        throw DspException(dspErrorKindOf(status), message.isEmpty ? 'Native status $status.' : message);
       }
       final result = out.ref;
-      if (result.feature_columns != AudioFeatureKey.columnCount) {
-        throw DspException(
-          DspErrorKind.unknown,
-          'Native feature layout has ${result.feature_columns} columns, expected ${AudioFeatureKey.columnCount}.',
-        );
-      }
-      final matrix = Float32List.fromList(result.features.asTypedList(result.feature_rows * result.feature_columns));
-      return DspAnalysis(
-        beats: _durations(result.beats, result.beat_count),
-        downbeats: _durations(result.downbeats, result.downbeat_count),
-        features: AudioFeatures(matrix, hopDuration: Duration(microseconds: result.feature_hop_micros)),
-        drums: _drums(result),
+      Float32List floats(ffi.Pointer<ffi.Float> pointer, int count) =>
+          count == 0 ? Float32List(0) : Float32List.fromList(pointer.asTypedList(count));
+      return DspResultData(
+        beats: floats(result.beats, result.beat_count),
+        downbeats: floats(result.downbeats, result.downbeat_count),
+        features: floats(result.features, result.feature_rows * result.feature_columns),
+        featureRows: result.feature_rows,
+        featureColumns: result.feature_columns,
+        featureHopMicros: result.feature_hop_micros,
+        drumTimes: floats(result.drum_times, result.drum_count),
+        drumClasses: result.drum_count == 0
+            ? Uint8List(0)
+            : Uint8List.fromList(result.drum_classes.asTypedList(result.drum_count)),
+        drumStrengths: floats(result.drum_strengths, result.drum_count),
         drumError: result.drum_error == ffi.nullptr ? null : result.drum_error.cast<Utf8>().toDartString(),
-      );
+      ).toAnalysis();
     } finally {
       try {
         bindings.icicles_dsp_free(out);
@@ -197,35 +198,4 @@ final class IciclesDsp {
       if (path != ffi.nullptr) calloc.free(path);
     }
   }
-
-  static DrumHits? _drums(bindings.IciclesDspResult result) {
-    final count = result.drum_count;
-    if (count == 0) return null;
-    final times = result.drum_times.asTypedList(count);
-    final classes = result.drum_classes.asTypedList(count);
-    final strengths = result.drum_strengths.asTypedList(count);
-    final hits = <DrumClass, List<DrumHit>>{};
-    for (var i = 0; i < count; i++) {
-      if (classes[i] >= DrumClass.values.length) continue;
-      (hits[DrumClass.values[classes[i]]] ??= []).add(
-        DrumHit(Duration(microseconds: (times[i] * Duration.microsecondsPerSecond).round()), strengths[i]),
-      );
-    }
-    return DrumHits(hits, source: DrumHits.sourceAdtof);
-  }
-
-  static List<Duration> _durations(ffi.Pointer<ffi.Float> seconds, int count) {
-    if (count == 0) return const [];
-    final values = seconds.asTypedList(count);
-    return [for (final s in values) Duration(microseconds: (s * Duration.microsecondsPerSecond).round())];
-  }
-
-  static DspErrorKind _kindOf(int status) => switch (status) {
-    1 => DspErrorKind.invalidArgument,
-    2 => DspErrorKind.modelNotFound,
-    3 => DspErrorKind.modelLoadFailed,
-    4 => DspErrorKind.analysisFailed,
-    5 => DspErrorKind.nativePanic,
-    _ => DspErrorKind.unknown,
-  };
 }

@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use icicles_dsp::beats::{resolve_models, track, SMALL_MODEL_FILE};
 use icicles_dsp::features::extract;
+use icicles_dsp::model::ModelSource;
 
 #[test]
 fn resolves_the_bundled_models() {
@@ -19,7 +20,7 @@ fn click_track_beats_land_on_the_grid() {
     let bpm = 120.0;
     let period = 60.0 / bpm;
     let signal = common::click_track(bpm, 20.0, 44100);
-    let beats = track(&signal, 44100, &common::model_dir()).unwrap();
+    let beats = track(&signal, 44100, ModelSource::Dir(&common::model_dir())).unwrap();
     assert!(
         beats.beats.len() >= 30,
         "found only {} beats: {:?}",
@@ -61,7 +62,7 @@ fn click_track_beats_land_on_the_grid() {
 #[test]
 fn silence_has_no_beats() {
     let signal = vec![0.0f32; 44100 * 20];
-    let beats = track(&signal, 44100, &common::model_dir()).unwrap();
+    let beats = track(&signal, 44100, ModelSource::Dir(&common::model_dir())).unwrap();
     assert!(beats.beats.is_empty(), "{:?}", beats.beats);
     assert!(beats.downbeats.is_empty());
 }
@@ -76,11 +77,40 @@ fn timing_three_minutes() {
     let features = extract(&signal, 44100).unwrap();
     let features_time = started.elapsed();
     let started = Instant::now();
-    let beats = track(&signal, 44100, &common::model_dir()).unwrap();
+    let beats = track(&signal, 44100, ModelSource::Dir(&common::model_dir())).unwrap();
     let beats_time = started.elapsed();
     eprintln!(
         "3 min @ 44.1 kHz: features {} rows in {features_time:?}, beats {} in {beats_time:?}",
         features.rows,
         beats.beats.len()
     );
+}
+
+#[test]
+fn models_from_bytes_track_like_models_from_a_directory() {
+    let dir = common::model_dir();
+    let (mel, beat) = resolve_models(&dir).unwrap();
+    let mel = std::fs::read(mel).unwrap();
+    let beat = std::fs::read(beat).unwrap();
+    let drum = std::fs::read(dir.join(icicles_dsp::drums::DRUM_MODEL_FILE)).unwrap();
+    let bytes = ModelSource::Bytes {
+        mel: &mel,
+        beat: &beat,
+        drum: Some(&drum),
+    };
+    let signal = common::click_track(120.0, 12.0, 44100);
+    assert_eq!(
+        track(&signal, 44100, bytes).unwrap(),
+        track(&signal, 44100, ModelSource::Dir(&dir)).unwrap()
+    );
+    assert_eq!(
+        icicles_dsp::drums::detect(&signal, 44100, bytes).unwrap(),
+        icicles_dsp::drums::detect(&signal, 44100, ModelSource::Dir(&dir)).unwrap()
+    );
+    let no_drum = ModelSource::Bytes {
+        mel: &mel,
+        beat: &beat,
+        drum: None,
+    };
+    assert!(icicles_dsp::drums::detect(&signal, 44100, no_drum).is_err());
 }
