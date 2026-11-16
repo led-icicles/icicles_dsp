@@ -1,3 +1,7 @@
+## 0.2.1
+
+- Depends on `icicles_generators` v0.9.0.
+
 ## 0.2.0
 
 - Drum hits: `rust/src/drums.rs` runs the ADTOF Frame_RNN drum transcription model (`models/adtof_frame_rnn.onnx`,
