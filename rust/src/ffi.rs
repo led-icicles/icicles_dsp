@@ -12,6 +12,7 @@ use std::path::Path;
 use std::ptr;
 
 use crate::beats::{self, BeatError};
+use crate::drums::{self, DrumError};
 use crate::features::{self, FeatureError, COLUMN_COUNT, HOP_MICROS};
 
 /// Status codes returned by [`icicles_dsp_analyze`].
@@ -51,6 +52,19 @@ pub struct IciclesDspResult {
     pub feature_columns: usize,
     /// Time between two feature rows in microseconds (10 000).
     pub feature_hop_micros: u32,
+    /// Drum hits (with [`ICICLES_DSP_DETECT_DRUMS`]), sorted by time: onset
+    /// times in seconds, classes (0 kick, 1 snare, 2 toms, 3 hi-hat,
+    /// 4 cymbals) and strengths `0..1`, `drum_count` of each.
+    pub drum_times: *mut f32,
+    pub drum_classes: *mut u8,
+    pub drum_strengths: *mut f32,
+    pub drum_count: usize,
+    /// Status of the drum detection: [`IciclesDspStatus::Ok`] when it ran
+    /// (or was not requested); otherwise the cause, with the message in
+    /// `drum_error`. A failed drum detection never fails the analysis.
+    pub drum_status: i32,
+    /// NUL-terminated message of a failed drum detection, else NULL.
+    pub drum_error: *mut c_char,
 }
 
 impl IciclesDspResult {
@@ -63,6 +77,12 @@ impl IciclesDspResult {
         feature_rows: 0,
         feature_columns: 0,
         feature_hop_micros: 0,
+        drum_times: ptr::null_mut(),
+        drum_classes: ptr::null_mut(),
+        drum_strengths: ptr::null_mut(),
+        drum_count: 0,
+        drum_status: 0,
+        drum_error: ptr::null_mut(),
     };
 }
 
@@ -78,20 +98,20 @@ fn set_last_error(message: impl Into<Vec<u8>>) {
 
 /// Hands a `Vec` to C: pointer + length, capacity shrunk to the length so
 /// [`take_back`] can rebuild it.
-fn give_away(values: Vec<f32>) -> (*mut f32, usize) {
+fn give_away<T>(values: Vec<T>) -> (*mut T, usize) {
     let boxed = values.into_boxed_slice();
     let len = boxed.len();
     if len == 0 {
         return (ptr::null_mut(), 0);
     }
-    (Box::into_raw(boxed) as *mut f32, len)
+    (Box::into_raw(boxed) as *mut T, len)
 }
 
 /// Reclaims an array made by [`give_away`].
 ///
 /// # Safety
 /// `pointer`/`len` must come from `give_away` and not have been freed.
-unsafe fn take_back(pointer: *mut f32, len: usize) {
+unsafe fn take_back<T>(pointer: *mut T, len: usize) {
     if pointer.is_null() || len == 0 {
         return;
     }
@@ -118,14 +138,22 @@ pub extern "C" fn icicles_dsp_last_error() -> *const c_char {
     LAST_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
+/// [`icicles_dsp_analyze`] flag: track beats and downbeats (Beat This!).
+pub const ICICLES_DSP_TRACK_BEATS: u32 = 1;
+/// [`icicles_dsp_analyze`] flag: detect drum hits (ADTOF).
+pub const ICICLES_DSP_DETECT_DRUMS: u32 = 2;
+
 /// Analyses `len` mono f32 samples (`-1..1`) at `sample_rate` Hz.
 ///
-/// `model_dir` is a NUL-terminated path to the directory with the Beat This!
-/// models (`mel_spectrogram.onnx` plus `beat_this.onnx` or
-/// `beat_this_small.onnx`); pass NULL to skip beat tracking and compute the
-/// features only. On success `out` holds the result (release it with
-/// [`icicles_dsp_free`]); on failure it is zeroed and the status names the
-/// cause, with details in [`icicles_dsp_last_error`].
+/// `model_dir` is a NUL-terminated path to the directory with the models:
+/// with [`ICICLES_DSP_TRACK_BEATS`] in `flags` the Beat This! models
+/// (`mel_spectrogram.onnx` plus `beat_this.onnx` or `beat_this_small.onnx`),
+/// with [`ICICLES_DSP_DETECT_DRUMS`] the drum model (`adtof_frame_rnn.onnx`).
+/// A NULL `model_dir` computes the features only, whatever the flags. On
+/// success `out` holds the result (release it with [`icicles_dsp_free`]); on
+/// failure it is zeroed and the status names the cause, with details in
+/// [`icicles_dsp_last_error`]. A failed drum detection is not a failure: it
+/// is reported in `drum_status` / `drum_error` of the result.
 ///
 /// # Safety
 /// `samples` must point to `len` readable `f32`s and `out` to a writable
@@ -136,6 +164,7 @@ pub unsafe extern "C" fn icicles_dsp_analyze(
     len: usize,
     sample_rate: u32,
     model_dir: *const c_char,
+    flags: u32,
     out: *mut IciclesDspResult,
 ) -> i32 {
     if out.is_null() {
@@ -144,7 +173,7 @@ pub unsafe extern "C" fn icicles_dsp_analyze(
     }
     ptr::write(out, IciclesDspResult::EMPTY);
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        analyze_checked(samples, len, sample_rate, model_dir)
+        analyze_checked(samples, len, sample_rate, model_dir, flags)
     }));
     match outcome {
         Ok(Ok(result)) => {
@@ -175,6 +204,7 @@ unsafe fn analyze_checked(
     len: usize,
     sample_rate: u32,
     model_dir: *const c_char,
+    flags: u32,
 ) -> Result<IciclesDspResult, Failure> {
     if samples.is_null() {
         return Err((IciclesDspStatus::InvalidArgument, "samples is null".into()));
@@ -203,17 +233,18 @@ unsafe fn analyze_checked(
         Some(Path::new(raw).to_path_buf())
     };
     let signal = std::slice::from_raw_parts(samples, len);
-    analyze(signal, sample_rate, model_dir.as_deref())
+    analyze(signal, sample_rate, model_dir.as_deref(), flags)
 }
 
 fn analyze(
     signal: &[f32],
     sample_rate: u32,
     model_dir: Option<&Path>,
+    flags: u32,
 ) -> Result<IciclesDspResult, Failure> {
     let features = features::extract(signal, sample_rate)
         .map_err(|e| (IciclesDspStatus::InvalidArgument, e.to_string()))?;
-    let beats = match model_dir {
+    let beats = match model_dir.filter(|_| flags & ICICLES_DSP_TRACK_BEATS != 0) {
         Some(dir) => beats::track(signal, sample_rate, dir).map_err(|e| {
             let status = match e {
                 BeatError::ModelNotFound(_) => IciclesDspStatus::ModelNotFound,
@@ -224,6 +255,28 @@ fn analyze(
         })?,
         None => beats::Beats::default(),
     };
+    let (drum_hits, drum_status, drum_error) = match model_dir
+        .filter(|_| flags & ICICLES_DSP_DETECT_DRUMS != 0)
+    {
+        None => (Vec::new(), IciclesDspStatus::Ok, ptr::null_mut()),
+        Some(dir) => match drums::detect(signal, sample_rate, dir) {
+            Ok(hits) => (hits, IciclesDspStatus::Ok, ptr::null_mut()),
+            Err(e) => {
+                let status = match e {
+                    DrumError::ModelNotFound(_) => IciclesDspStatus::ModelNotFound,
+                    DrumError::ModelLoad(_) => IciclesDspStatus::ModelLoadFailed,
+                    DrumError::Analysis(_) => IciclesDspStatus::AnalysisFailed,
+                };
+                let message = CString::new(e.to_string())
+                    .unwrap_or_else(|_| CString::new("drum detection failed").expect("literal"));
+                (Vec::new(), status, message.into_raw())
+            }
+        },
+    };
+    let drum_count = drum_hits.len();
+    let (drum_times, _) = give_away(drum_hits.iter().map(|h| h.time).collect());
+    let (drum_classes, _) = give_away(drum_hits.iter().map(|h| h.class as u8).collect());
+    let (drum_strengths, _) = give_away(drum_hits.iter().map(|h| h.strength).collect());
     let (beat_ptr, beat_count) = give_away(beats.beats);
     let (downbeat_ptr, downbeat_count) = give_away(beats.downbeats);
     let (feature_ptr, _) = give_away(features.data);
@@ -236,6 +289,12 @@ fn analyze(
         feature_rows: features.rows,
         feature_columns: COLUMN_COUNT,
         feature_hop_micros: HOP_MICROS,
+        drum_times,
+        drum_classes,
+        drum_strengths,
+        drum_count,
+        drum_status: drum_status as i32,
+        drum_error,
     })
 }
 
@@ -257,6 +316,12 @@ pub unsafe extern "C" fn icicles_dsp_free(out: *mut IciclesDspResult) {
             result.features,
             result.feature_rows * result.feature_columns,
         );
+        take_back(result.drum_times, result.drum_count);
+        take_back(result.drum_classes, result.drum_count);
+        take_back(result.drum_strengths, result.drum_count);
+        if !result.drum_error.is_null() {
+            drop(CString::from_raw(result.drum_error));
+        }
         ptr::write(out, IciclesDspResult::EMPTY);
     }));
 }
@@ -284,7 +349,14 @@ mod tests {
         let signal = vec![0.1f32; 44100];
         let mut out = IciclesDspResult::EMPTY;
         let status = unsafe {
-            icicles_dsp_analyze(signal.as_ptr(), signal.len(), 44100, ptr::null(), &mut out)
+            icicles_dsp_analyze(
+                signal.as_ptr(),
+                signal.len(),
+                44100,
+                ptr::null(),
+                0,
+                &mut out,
+            )
         };
         assert_eq!(status, IciclesDspStatus::Ok as i32);
         assert_eq!(last_error(), "");
@@ -309,17 +381,17 @@ mod tests {
         let mut out = IciclesDspResult::EMPTY;
         let signal = [0.0f32; 10];
         assert_eq!(
-            unsafe { icicles_dsp_analyze(ptr::null(), 10, 44100, ptr::null(), &mut out) },
+            unsafe { icicles_dsp_analyze(ptr::null(), 10, 44100, ptr::null(), 0, &mut out) },
             IciclesDspStatus::InvalidArgument as i32
         );
         assert_eq!(last_error(), "samples is null");
         assert_eq!(
-            unsafe { icicles_dsp_analyze(signal.as_ptr(), 0, 44100, ptr::null(), &mut out) },
+            unsafe { icicles_dsp_analyze(signal.as_ptr(), 0, 44100, ptr::null(), 0, &mut out) },
             IciclesDspStatus::InvalidArgument as i32
         );
         assert_eq!(
             unsafe {
-                icicles_dsp_analyze(signal.as_ptr(), signal.len(), 999, ptr::null(), &mut out)
+                icicles_dsp_analyze(signal.as_ptr(), signal.len(), 999, ptr::null(), 0, &mut out)
             },
             IciclesDspStatus::InvalidArgument as i32
         );
@@ -331,6 +403,7 @@ mod tests {
                     signal.len(),
                     44100,
                     ptr::null(),
+                    0,
                     ptr::null_mut(),
                 )
             },
@@ -344,7 +417,14 @@ mod tests {
         let dir = CString::new("/nonexistent/icicles_dsp_models").unwrap();
         let mut out = IciclesDspResult::EMPTY;
         let status = unsafe {
-            icicles_dsp_analyze(signal.as_ptr(), signal.len(), 44100, dir.as_ptr(), &mut out)
+            icicles_dsp_analyze(
+                signal.as_ptr(),
+                signal.len(),
+                44100,
+                dir.as_ptr(),
+                ICICLES_DSP_TRACK_BEATS,
+                &mut out,
+            )
         };
         assert_eq!(status, IciclesDspStatus::ModelNotFound as i32);
         assert!(
@@ -353,5 +433,80 @@ mod tests {
             last_error()
         );
         assert!(out.features.is_null());
+    }
+
+    #[test]
+    fn detects_drums_with_the_bundled_model() {
+        // Kicks every 0.5 s from 0.25 s: decaying 60 Hz bursts.
+        let sr = 44_100usize;
+        let signal: Vec<f32> = (0..sr * 3)
+            .map(|i| {
+                let t = i as f64 / sr as f64 - 0.25;
+                if t < 0.0 {
+                    return 0.0;
+                }
+                let dt = t % 0.5;
+                (0.9 * (-dt / 0.12).exp()
+                    * (2.0 * std::f64::consts::PI * (55.0 * dt + 3.0 * (1.0 - (-30.0 * dt).exp())))
+                        .sin()) as f32
+            })
+            .collect();
+        let dir = CString::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../models")).unwrap();
+        let mut out = IciclesDspResult::EMPTY;
+        let status = unsafe {
+            icicles_dsp_analyze(
+                signal.as_ptr(),
+                signal.len(),
+                44100,
+                dir.as_ptr(),
+                ICICLES_DSP_DETECT_DRUMS,
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::Ok as i32, "{}", last_error());
+        assert_eq!(out.drum_status, IciclesDspStatus::Ok as i32);
+        assert!(out.drum_error.is_null());
+        assert_eq!(out.beat_count, 0, "beats were not requested");
+        let times = unsafe { std::slice::from_raw_parts(out.drum_times, out.drum_count) };
+        let classes = unsafe { std::slice::from_raw_parts(out.drum_classes, out.drum_count) };
+        let strengths = unsafe { std::slice::from_raw_parts(out.drum_strengths, out.drum_count) };
+        let kicks: Vec<f32> = times
+            .iter()
+            .zip(classes)
+            .filter(|(_, c)| **c == 0)
+            .map(|(t, _)| *t)
+            .collect();
+        assert!(kicks.len() >= 5, "kicks {kicks:?}, classes {classes:?}");
+        assert!(strengths.iter().all(|s| (0.0..=1.0).contains(s)));
+        assert!(times.windows(2).all(|w| w[0] <= w[1]));
+        unsafe { icicles_dsp_free(&mut out) };
+        assert!(out.drum_times.is_null());
+    }
+
+    #[test]
+    fn missing_drum_model_does_not_fail_the_analysis() {
+        let signal = vec![0.1f32; 44100];
+        let dir = CString::new("/nonexistent/icicles_dsp_models").unwrap();
+        let mut out = IciclesDspResult::EMPTY;
+        let status = unsafe {
+            icicles_dsp_analyze(
+                signal.as_ptr(),
+                signal.len(),
+                44100,
+                dir.as_ptr(),
+                ICICLES_DSP_DETECT_DRUMS,
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::Ok as i32);
+        assert_eq!(out.feature_rows, 100);
+        assert_eq!(out.drum_count, 0);
+        assert_eq!(out.drum_status, IciclesDspStatus::ModelNotFound as i32);
+        let message = unsafe { CStr::from_ptr(out.drum_error) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(message.contains("adtof_frame_rnn.onnx"), "{message}");
+        unsafe { icicles_dsp_free(&mut out) };
+        assert!(out.drum_error.is_null());
     }
 }

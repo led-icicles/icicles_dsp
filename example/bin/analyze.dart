@@ -47,6 +47,10 @@ Future<void> main(List<String> args) async {
       'features: ${analysis.features.frameCount} rows × ${AudioFeatureKey.columnCount} '
       'every ${analysis.features.hopDuration.inMilliseconds} ms',
     )
+    ..writeln(
+      'drums: ${[for (final c in DrumClass.values) '${c.name} ${analysis.drums.of(c).length}'].join(', ')}'
+      '${analysis.drumError == null ? '' : ' (${analysis.drumError})'}',
+    )
     ..writeln('analysed in ${stopwatch.elapsedMilliseconds} ms');
   if (analysis.beats.isNotEmpty) {
     final first = analysis.beats.take(8).map(_clock).join(', ');

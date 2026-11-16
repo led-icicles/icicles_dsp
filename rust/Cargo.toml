@@ -1,9 +1,9 @@
 [package]
 name = "icicles_dsp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.89"
-description = "Native audio analysis for icicles animations: Beat This! beat tracking and the icicles_generators feature matrix behind a C ABI."
+description = "Native audio analysis for icicles animations: Beat This! beat tracking, ADTOF drum hits and the icicles_generators feature matrix behind a C ABI."
 license = "MIT"
 repository = "https://github.com/led-icicles/icicles_dsp"
 publish = false
@@ -13,7 +13,9 @@ name = "icicles_dsp"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
+anyhow = "1"
 beat-this = { version = "1.1", default-features = false }
+rubato = "3.0"
 rustfft = "6"
 
 [dev-dependencies]

@@ -34,12 +34,53 @@ void main() {
 
   test('the native library loads', () {
     expect(IciclesDsp.isAvailable, isTrue);
-    expect(IciclesDsp.version, '0.1.0');
+    expect(IciclesDsp.version, '0.2.0');
   });
 
   test('bundled models resolve to the package models directory', () {
     expect(File('$modelDir/${IciclesDsp.melModelFile}').existsSync(), isTrue);
     expect(File('$modelDir/${IciclesDsp.smallModelFile}').existsSync(), isTrue);
+    expect(File('$modelDir/${IciclesDsp.drumModelFile}').existsSync(), isTrue);
+  });
+
+  test('detects the drums of the synthetic loop', () async {
+    // The fixture of tool/export_adtof/export_adtof.py: 120 BPM from 0.1 s,
+    // kick on every beat, snare on 2 and 4, hi-hats on eighths.
+    final bytes = File('rust/tests/fixtures/adtof/drum_loop_44100.pcm').readAsBytesSync();
+    final pcm = Int16List.view(Uint8List.fromList(bytes).buffer);
+    final mono = Float32List.fromList([for (final v in pcm) v / 32768]);
+    final analysis = await const IciclesDsp().analyze(mono, 44100, modelDir: modelDir, trackBeats: false);
+    expect(analysis.drumError, isNull);
+    expect(analysis.drums.source, DrumHits.sourceAdtof);
+    List<int> ms(DrumClass c) => [for (final h in analysis.drums.of(c)) h.time.inMilliseconds];
+    final kicks = ms(DrumClass.kick);
+    expect(kicks, hasLength(4));
+    for (final (i, t) in kicks.indexed) {
+      expect((t - (100 + 500 * i)).abs(), lessThanOrEqualTo(30), reason: '$kicks');
+    }
+    expect(ms(DrumClass.snare), hasLength(2));
+    expect(ms(DrumClass.hihat).length, greaterThanOrEqualTo(6));
+    for (final cls in DrumClass.values) {
+      for (final hit in analysis.drums.of(cls)) {
+        expect(hit.strength, inInclusiveRange(0.05, 1.0));
+      }
+    }
+  });
+
+  test('a missing drum model leaves the beats and features intact', () async {
+    final dir = Directory('${temp.path}/beats-only')..createSync();
+    for (final name in [IciclesDsp.melModelFile, IciclesDsp.smallModelFile]) {
+      File('$modelDir/$name').copySync('${dir.path}/$name');
+    }
+    final analysis = await const IciclesDsp().analyze(
+      clickTrack(bpm: 120, seconds: 8, sampleRate: 44100),
+      44100,
+      modelDir: dir.path,
+    );
+    expect(analysis.beats, isNotEmpty);
+    expect(analysis.features.frameCount, 800);
+    expect(analysis.drums.isEmpty, isTrue);
+    expect(analysis.drumError, contains(IciclesDsp.drumModelFile));
   });
 
   test('analyzes a generated 120 BPM click-track WAV', () async {
@@ -78,9 +119,10 @@ void main() {
         0.5 * math.sin(2 * math.pi * 220 * i / 48000) * (0.5 + 0.5 * math.sin(2 * math.pi * 0.7 * i / 48000)) +
             0.05 * (random.nextDouble() * 2 - 1),
     ]);
-    final analysis = await const IciclesDsp().analyze(signal, 48000, trackBeats: false);
+    final analysis = await const IciclesDsp().analyze(signal, 48000, trackBeats: false, detectDrums: false);
     final reference = AudioFeatureExtractor.extract(signal, 48000);
     expect(analysis.beats, isEmpty);
+    expect(analysis.drums.isEmpty, isTrue);
     expect(analysis.features.frameCount, reference.frameCount);
     expect(analysis.features.toBytes(), reference.toBytes());
     expect(analysis.features.contentHash, reference.contentHash);

@@ -11,7 +11,7 @@ import 'dsp_analysis.dart';
 import 'dsp_exception.dart';
 import 'icicles_dsp_bindings_generated.dart' as bindings;
 
-/// Native audio analysis: Beat This! beat tracking plus the
+/// Native audio analysis: Beat This! beat tracking, ADTOF drum hits and the
 /// `icicles_generators` feature matrix, computed by the Rust crate behind
 /// `dart:ffi` on a background isolate.
 ///
@@ -28,6 +28,9 @@ final class IciclesDsp {
 
   /// File name of the bundled small beat model (about 10 MB).
   static const smallModelFile = 'beat_this_small.onnx';
+
+  /// File name of the bundled drum model (ADTOF Frame_RNN, about 2 MB).
+  static const drumModelFile = 'adtof_frame_rnn.onnx';
 
   /// Whether the native library can be loaded on this platform.
   static bool get isAvailable => version != null;
@@ -99,19 +102,28 @@ final class IciclesDsp {
   /// Analyses [mono] PCM (`-1..1`) at [sampleRate] Hz on a background isolate.
   ///
   /// With [trackBeats] the Beat This! models are read from [modelDir]
-  /// ([melModelFile] plus [fullModelFile] or [smallModelFile]); a `null`
-  /// [modelDir] falls back to [bundledModelDir] and fails with
-  /// [DspErrorKind.modelNotFound] when that is unavailable. Without
-  /// [trackBeats] only the features are computed (no models needed).
+  /// ([melModelFile] plus [fullModelFile] or [smallModelFile]), with
+  /// [detectDrums] the drum model ([drumModelFile]); a `null` [modelDir]
+  /// falls back to [bundledModelDir] and fails with
+  /// [DspErrorKind.modelNotFound] when that is unavailable. Without either
+  /// only the features are computed (no models needed). A failed drum
+  /// detection does not fail the analysis: it leaves [DspAnalysis.drums]
+  /// empty and explains itself in [DspAnalysis.drumError].
   ///
   /// Throws [DspException].
-  Future<DspAnalysis> analyze(Float32List mono, int sampleRate, {String? modelDir, bool trackBeats = true}) async {
+  Future<DspAnalysis> analyze(
+    Float32List mono,
+    int sampleRate, {
+    String? modelDir,
+    bool trackBeats = true,
+    bool detectDrums = true,
+  }) async {
     if (mono.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
     if (sampleRate < 1000) {
       throw DspException(DspErrorKind.invalidArgument, 'Sample rate $sampleRate Hz is below the 1000 Hz minimum.');
     }
     String? models;
-    if (trackBeats) {
+    if (trackBeats || detectDrums) {
       models = modelDir ?? await bundledModelDir();
       if (models == null) {
         throw const DspException(
@@ -121,12 +133,29 @@ final class IciclesDsp {
       }
     }
     final transfer = TransferableTypedData.fromList([mono]);
-    return Isolate.run(() => analyzeSync(transfer.materialize().asFloat32List(), sampleRate, modelDir: models));
+    return Isolate.run(
+      () => analyzeSync(
+        transfer.materialize().asFloat32List(),
+        sampleRate,
+        modelDir: models,
+        trackBeats: trackBeats,
+        detectDrums: detectDrums,
+      ),
+    );
   }
 
   /// The synchronous native call behind [analyze]; blocks the calling isolate
-  /// for the whole analysis. A `null` [modelDir] skips beat tracking.
-  static DspAnalysis analyzeSync(Float32List mono, int sampleRate, {String? modelDir}) {
+  /// for the whole analysis. A `null` [modelDir] skips beat tracking and drum
+  /// detection.
+  static DspAnalysis analyzeSync(
+    Float32List mono,
+    int sampleRate, {
+    String? modelDir,
+    bool trackBeats = true,
+    bool detectDrums = true,
+  }) {
+    final flags =
+        (trackBeats ? bindings.ICICLES_DSP_TRACK_BEATS : 0) | (detectDrums ? bindings.ICICLES_DSP_DETECT_DRUMS : 0);
     final samples = calloc<ffi.Float>(mono.length);
     final out = calloc<bindings.IciclesDspResult>();
     final path = modelDir?.toNativeUtf8() ?? ffi.nullptr;
@@ -134,7 +163,7 @@ final class IciclesDsp {
       samples.asTypedList(mono.length).setAll(0, mono);
       final int status;
       try {
-        status = bindings.icicles_dsp_analyze(samples, mono.length, sampleRate, path.cast(), out);
+        status = bindings.icicles_dsp_analyze(samples, mono.length, sampleRate, path.cast(), flags, out);
       } on Error catch (e) {
         throw DspException(DspErrorKind.libraryUnavailable, 'The icicles_dsp native library is not available: $e');
       }
@@ -154,6 +183,8 @@ final class IciclesDsp {
         beats: _durations(result.beats, result.beat_count),
         downbeats: _durations(result.downbeats, result.downbeat_count),
         features: AudioFeatures(matrix, hopDuration: Duration(microseconds: result.feature_hop_micros)),
+        drums: _drums(result),
+        drumError: result.drum_error == ffi.nullptr ? null : result.drum_error.cast<Utf8>().toDartString(),
       );
     } finally {
       try {
@@ -165,6 +196,22 @@ final class IciclesDsp {
       calloc.free(samples);
       if (path != ffi.nullptr) calloc.free(path);
     }
+  }
+
+  static DrumHits? _drums(bindings.IciclesDspResult result) {
+    final count = result.drum_count;
+    if (count == 0) return null;
+    final times = result.drum_times.asTypedList(count);
+    final classes = result.drum_classes.asTypedList(count);
+    final strengths = result.drum_strengths.asTypedList(count);
+    final hits = <DrumClass, List<DrumHit>>{};
+    for (var i = 0; i < count; i++) {
+      if (classes[i] >= DrumClass.values.length) continue;
+      (hits[DrumClass.values[classes[i]]] ??= []).add(
+        DrumHit(Duration(microseconds: (times[i] * Duration.microsecondsPerSecond).round()), strengths[i]),
+      );
+    }
+    return DrumHits(hits, source: DrumHits.sourceAdtof);
   }
 
   static List<Duration> _durations(ffi.Pointer<ffi.Float> seconds, int count) {

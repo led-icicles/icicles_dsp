@@ -45,3 +45,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Drum model
+
+`adtof_frame_rnn.onnx` (~1.8 MB) is the Frame_RNN drum transcription model of
+[ADTOF](https://github.com/MZehren/ADTOF) — M. Zehren, M. Alunno, P. Bientinesi,
+"ADTOF: A large dataset of non-synthetic music for automatic drum transcription"
+(ISMIR 2021) and "High-quality and reproducible automatic drum transcription
+from crowdsourced data" (Signals, 2023) — exported to ONNX by
+`tool/export_adtof/export_adtof.py` from the PyTorch weights of
+[xavriley/ADTOF-pytorch](https://github.com/xavriley/ADTOF-pytorch) (commit
+`85c192e78f716ea0b111cc8a5ee4a8f6a3a4f8a9`, SHA-256 of
+`adtof_frame_rnn_pytorch_weights.pth`:
+`1bc986e596ec47ba0b44916f87cd4a39f0b2bec23596df3fb5d0e87749217320`). The
+network and its weights are unchanged; only the GRU layers are expressed as
+ONNX `GRU` operators.
+
+The ADTOF work, including the model weights, is licensed under the
+[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+License](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0):
+non-commercial use only, with attribution, and adaptations under the same
+license. The rest of this package stays MIT.

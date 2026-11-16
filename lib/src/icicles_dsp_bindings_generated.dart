@@ -21,18 +21,21 @@ external ffi.Pointer<ffi.Char> icicles_dsp_last_error();
 
 /// Analyses `len` mono float samples (-1..1) at `sample_rate` Hz.
 ///
-/// `model_dir` is a NUL-terminated path to the directory with the Beat This!
-/// models (mel_spectrogram.onnx plus beat_this.onnx or beat_this_small.onnx);
-/// pass NULL to skip beat tracking and compute the features only. On success
-/// `out` holds the result (release it with icicles_dsp_free); on failure it is
-/// zeroed and the returned IciclesDspStatus names the cause, with details in
-/// icicles_dsp_last_error.
+/// `model_dir` is a NUL-terminated path to the directory with the models: with
+/// ICICLES_DSP_TRACK_BEATS in `flags` the Beat This! models (mel_spectrogram.onnx
+/// plus beat_this.onnx or beat_this_small.onnx), with ICICLES_DSP_DETECT_DRUMS
+/// the drum model (adtof_frame_rnn.onnx). A NULL `model_dir` computes the
+/// features only, whatever the flags. On success `out` holds the result
+/// (release it with icicles_dsp_free); on failure it is zeroed and the returned
+/// IciclesDspStatus names the cause, with details in icicles_dsp_last_error. A
+/// failed drum detection is not a failure: see drum_status / drum_error.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Pointer<ffi.Float>,
     ffi.Size,
     ffi.Uint32,
     ffi.Pointer<ffi.Char>,
+    ffi.Uint32,
     ffi.Pointer<IciclesDspResult>,
   )
 >()
@@ -41,6 +44,7 @@ external int icicles_dsp_analyze(
   int len,
   int sample_rate,
   ffi.Pointer<ffi.Char> model_dir,
+  int flags,
   ffi.Pointer<IciclesDspResult> out,
 );
 
@@ -111,4 +115,29 @@ final class IciclesDspResult extends ffi.Struct {
   /// Time between two feature rows in microseconds (10 000).
   @ffi.Uint32()
   external int feature_hop_micros;
+
+  /// Drum hits (with ICICLES_DSP_DETECT_DRUMS), sorted by time: onset times in
+  /// seconds, classes (0 kick, 1 snare, 2 toms, 3 hi-hat, 4 cymbals) and
+  /// strengths 0..1, drum_count of each.
+  external ffi.Pointer<ffi.Float> drum_times;
+
+  external ffi.Pointer<ffi.Uint8> drum_classes;
+
+  external ffi.Pointer<ffi.Float> drum_strengths;
+
+  @ffi.Size()
+  external int drum_count;
+
+  /// Status of the drum detection: ICICLES_DSP_OK when it ran (or was not
+  /// requested), otherwise the cause with the message in drum_error. A failed
+  /// drum detection never fails the analysis.
+  @ffi.Int32()
+  external int drum_status;
+
+  /// NUL-terminated message of a failed drum detection, else NULL.
+  external ffi.Pointer<ffi.Char> drum_error;
 }
+
+const int ICICLES_DSP_TRACK_BEATS = 1;
+
+const int ICICLES_DSP_DETECT_DRUMS = 2;

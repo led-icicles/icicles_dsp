@@ -15,3 +15,6 @@
 # The full-accuracy beat model is downloaded, not committed (tool/download-models.sh).
 /models/beat_this.onnx
 /models/*.sha256
+
+# Python bytecode of the export tool.
+__pycache__/

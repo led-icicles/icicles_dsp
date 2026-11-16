@@ -8,7 +8,8 @@
 /// Native only (macOS, Windows); do not import this package on the web.
 library;
 
-export 'package:icicles_generators/icicles_generators.dart' show AudioFeatureKey, AudioFeatures;
+export 'package:icicles_generators/icicles_generators.dart'
+    show AudioFeatureKey, AudioFeatures, DrumClass, DrumHit, DrumHits;
 
 export 'src/dsp_analysis.dart';
 export 'src/dsp_exception.dart';
