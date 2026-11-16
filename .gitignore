@@ -18,3 +18,8 @@
 
 # Python bytecode of the export tool.
 __pycache__/
+
+# The deep-analysis models are downloaded, not committed (tool/download-deep-models.sh).
+/models/htdemucs_core.onnx
+/models/allin1_fold*.onnx
+/models/*.part

@@ -14,10 +14,14 @@
 //! directly as well.
 
 pub mod beats;
+pub mod deep;
+pub mod demucs;
 pub mod drums;
 pub mod features;
 pub mod ffi;
 pub mod model;
+pub mod spectrum;
+pub mod structure;
 
 /// The crate version, also returned by `icicles_dsp_version()`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

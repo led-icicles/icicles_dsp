@@ -7,5 +7,6 @@ export 'package:icicles_generators/icicles_generators.dart'
     show AudioFeatureKey, AudioFeatures, DrumClass, DrumHit, DrumHits;
 
 export 'src/dsp_analysis.dart';
+export 'src/dsp_deep_analysis.dart';
 export 'src/dsp_exception.dart';
 export 'src/dsp_result_data.dart' show DspResultData;

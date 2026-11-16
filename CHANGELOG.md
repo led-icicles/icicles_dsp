@@ -1,3 +1,15 @@
+## 0.4.0
+
+- Deep analysis: `rust/src/deep.rs` runs Hybrid Transformer Demucs (`rust/src/demucs.rs`, stems drums/bass/other/
+  vocals, matching PyTorch `demucs` 4.1) and the All-In-One song structure model (`rust/src/structure.rs`, 8 Harmonix
+  folds, madmom spectrogram port in `rust/src/spectrum.rs`) → labelled sections, per-stem loudness every 10 ms and the
+  chroma of the harmonic stems. Models via `tool/download-deep-models.sh` (LightCut ONNX conversions, MIT).
+- C ABI: `icicles_dsp_analyze_deep` / `icicles_dsp_analyze_deep_models` with an `IciclesDspControl` block (progress,
+  cancel), `icicles_dsp_free_deep`, `icicles_dsp_control_size`; status `ICICLES_DSP_CANCELLED`.
+- Dart: `IciclesDsp.analyzeDeep` (progress, cancel), `DspDeepAnalysis` / `DspSection` / `DspSectionLabel` /
+  `DspStem` (with a Web Worker wire form), `DspErrorKind.cancelled`; `IciclesDspWasm.analyzeDeep` in the browser.
+- `rust/examples/deep_analyze.rs` (sections and timings of a WAV).
+
 ## 0.3.0
 
 - Browser build: `tool/build_wasm.sh` compiles the crate to `wasm32-wasip1` with SIMD;

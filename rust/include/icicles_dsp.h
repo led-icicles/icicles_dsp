@@ -24,6 +24,8 @@ typedef enum IciclesDspStatus {
   ICICLES_DSP_ANALYSIS_FAILED = 4,
   // A panic was caught; the library stays usable.
   ICICLES_DSP_PANIC = 5,
+  // The deep analysis was cancelled through its control block.
+  ICICLES_DSP_CANCELLED = 6,
 } IciclesDspStatus;
 
 // The analysis output. The arrays are owned by the library: release them with
@@ -104,6 +106,55 @@ void icicles_dsp_dealloc(uint8_t *pointer, size_t len);
 // Releases the arrays of a result filled by icicles_dsp_analyze and zeroes it.
 // NULL and already-freed results are no-ops.
 void icicles_dsp_free(IciclesDspResult *out);
+
+// Progress and cancellation of a deep analysis, shared with another thread:
+// `progress` holds the bits of an f32 in 0..1 (written by the library),
+// a non-zero `cancel` (written by the caller) stops the analysis.
+typedef struct IciclesDspControl {
+  uint32_t progress;
+  uint32_t cancel;
+} IciclesDspControl;
+
+// The deep analysis output. The arrays are owned by the library: release them
+// with icicles_dsp_free_deep. A zeroed struct is valid and free-able.
+typedef struct IciclesDspDeepResult {
+  // Sections covering the song: start/end in seconds and label index
+  // (0 start, 1 end, 2 intro, 3 outro, 4 break, 5 bridge, 6 inst, 7 solo,
+  // 8 verse, 9 chorus), section_count of each.
+  float *section_starts;
+  float *section_ends;
+  uint8_t *section_labels;
+  size_t section_count;
+  // Stem loudness 0..1, row-major stem_rows x 4 (drums, bass, other, vocals),
+  // one row every 10 ms (the rows of the feature matrix).
+  float *stem_levels;
+  size_t stem_rows;
+  // Chroma of the harmonic stems, row-major chroma_rows x 12 (C..B), 10 rows a
+  // second, each row summing to 1 (all zero in silence).
+  float *chroma;
+  size_t chroma_rows;
+} IciclesDspDeepResult;
+
+// Runs the deep analysis (Demucs stems -> stem loudness, chroma and the
+// All-In-One song structure with `folds` of the 8 folds) of `len` mono samples
+// at `sample_rate`. `model_dir` holds htdemucs_core.onnx and
+// allin1_fold0..7.onnx. `control` may be NULL. Minutes of CPU; returns
+// ICICLES_DSP_CANCELLED when cancelled.
+int32_t icicles_dsp_analyze_deep(const float *samples, size_t len, uint32_t sample_rate, const char *model_dir,
+                                 uint32_t folds, IciclesDspControl *control, IciclesDspDeepResult *out);
+
+// Like icicles_dsp_analyze_deep with the models as bytes (the browser): the
+// Demucs network and `fold_count` fold models, all of which run.
+int32_t icicles_dsp_analyze_deep_models(const float *samples, size_t len, uint32_t sample_rate,
+                                        const uint8_t *demucs, size_t demucs_len, const uint8_t *const *folds,
+                                        const size_t *fold_lens, size_t fold_count, IciclesDspControl *control,
+                                        IciclesDspDeepResult *out);
+
+// Releases the arrays of a deep result and zeroes it.
+void icicles_dsp_free_deep(IciclesDspDeepResult *out);
+
+// Size in bytes of IciclesDspControl (8).
+size_t icicles_dsp_control_size(void);
 
 #ifdef __cplusplus
 }

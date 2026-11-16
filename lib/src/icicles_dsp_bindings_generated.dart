@@ -96,6 +96,69 @@ external void icicles_dsp_dealloc(ffi.Pointer<ffi.Uint8> pointer, int len);
 @ffi.Native<ffi.Void Function(ffi.Pointer<IciclesDspResult>)>()
 external void icicles_dsp_free(ffi.Pointer<IciclesDspResult> out);
 
+/// Runs the deep analysis (Demucs stems -> stem loudness, chroma and the
+/// All-In-One song structure with `folds` of the 8 folds) of `len` mono samples
+/// at `sample_rate`. `model_dir` holds htdemucs_core.onnx and
+/// allin1_fold0..7.onnx. `control` may be NULL. Minutes of CPU; returns
+/// ICICLES_DSP_CANCELLED when cancelled.
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Float>,
+    ffi.Size,
+    ffi.Uint32,
+    ffi.Pointer<ffi.Char>,
+    ffi.Uint32,
+    ffi.Pointer<IciclesDspControl>,
+    ffi.Pointer<IciclesDspDeepResult>,
+  )
+>()
+external int icicles_dsp_analyze_deep(
+  ffi.Pointer<ffi.Float> samples,
+  int len,
+  int sample_rate,
+  ffi.Pointer<ffi.Char> model_dir,
+  int folds,
+  ffi.Pointer<IciclesDspControl> control,
+  ffi.Pointer<IciclesDspDeepResult> out,
+);
+
+/// Like icicles_dsp_analyze_deep with the models as bytes (the browser): the
+/// Demucs network and `fold_count` fold models, all of which run.
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Float>,
+    ffi.Size,
+    ffi.Uint32,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+    ffi.Size,
+    ffi.Pointer<IciclesDspControl>,
+    ffi.Pointer<IciclesDspDeepResult>,
+  )
+>()
+external int icicles_dsp_analyze_deep_models(
+  ffi.Pointer<ffi.Float> samples,
+  int len,
+  int sample_rate,
+  ffi.Pointer<ffi.Uint8> demucs,
+  int demucs_len,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> folds,
+  ffi.Pointer<ffi.Size> fold_lens,
+  int fold_count,
+  ffi.Pointer<IciclesDspControl> control,
+  ffi.Pointer<IciclesDspDeepResult> out,
+);
+
+/// Releases the arrays of a deep result and zeroes it.
+@ffi.Native<ffi.Void Function(ffi.Pointer<IciclesDspDeepResult>)>()
+external void icicles_dsp_free_deep(ffi.Pointer<IciclesDspDeepResult> out);
+
+/// Size in bytes of IciclesDspControl (8).
+@ffi.Native<ffi.Size Function()>()
+external int icicles_dsp_control_size();
+
 /// Status codes of icicles_dsp_analyze.
 enum IciclesDspStatus {
   /// Success.
@@ -114,7 +177,10 @@ enum IciclesDspStatus {
   ICICLES_DSP_ANALYSIS_FAILED(4),
 
   /// A panic was caught; the library stays usable.
-  ICICLES_DSP_PANIC(5);
+  ICICLES_DSP_PANIC(5),
+
+  /// The deep analysis was cancelled through its control block.
+  ICICLES_DSP_CANCELLED(6);
 
   final int value;
   const IciclesDspStatus(this.value);
@@ -126,6 +192,7 @@ enum IciclesDspStatus {
     3 => ICICLES_DSP_MODEL_LOAD_FAILED,
     4 => ICICLES_DSP_ANALYSIS_FAILED,
     5 => ICICLES_DSP_PANIC,
+    6 => ICICLES_DSP_CANCELLED,
     _ => throw ArgumentError('Unknown value for IciclesDspStatus: $value'),
   };
 }
@@ -179,6 +246,47 @@ final class IciclesDspResult extends ffi.Struct {
 
   /// NUL-terminated message of a failed drum detection, else NULL.
   external ffi.Pointer<ffi.Char> drum_error;
+}
+
+/// Progress and cancellation of a deep analysis, shared with another thread:
+/// `progress` holds the bits of an f32 in 0..1 (written by the library),
+/// a non-zero `cancel` (written by the caller) stops the analysis.
+final class IciclesDspControl extends ffi.Struct {
+  @ffi.Uint32()
+  external int progress;
+
+  @ffi.Uint32()
+  external int cancel;
+}
+
+/// The deep analysis output. The arrays are owned by the library: release them
+/// with icicles_dsp_free_deep. A zeroed struct is valid and free-able.
+final class IciclesDspDeepResult extends ffi.Struct {
+  /// Sections covering the song: start/end in seconds and label index
+  /// (0 start, 1 end, 2 intro, 3 outro, 4 break, 5 bridge, 6 inst, 7 solo,
+  /// 8 verse, 9 chorus), section_count of each.
+  external ffi.Pointer<ffi.Float> section_starts;
+
+  external ffi.Pointer<ffi.Float> section_ends;
+
+  external ffi.Pointer<ffi.Uint8> section_labels;
+
+  @ffi.Size()
+  external int section_count;
+
+  /// Stem loudness 0..1, row-major stem_rows x 4 (drums, bass, other, vocals),
+  /// one row every 10 ms (the rows of the feature matrix).
+  external ffi.Pointer<ffi.Float> stem_levels;
+
+  @ffi.Size()
+  external int stem_rows;
+
+  /// Chroma of the harmonic stems, row-major chroma_rows x 12 (C..B), 10 rows a
+  /// second, each row summing to 1 (all zero in silence).
+  external ffi.Pointer<ffi.Float> chroma;
+
+  @ffi.Size()
+  external int chroma_rows;
 }
 
 const int ICICLES_DSP_TRACK_BEATS = 1;

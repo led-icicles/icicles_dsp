@@ -12,6 +12,7 @@ use std::path::Path;
 use std::ptr;
 
 use crate::beats::{self, BeatError};
+use crate::deep::{self, Control, DeepError, DeepModels};
 use crate::drums::{self, DrumError};
 use crate::features::{self, FeatureError, COLUMN_COUNT, HOP_MICROS};
 use crate::model::ModelSource;
@@ -32,6 +33,8 @@ pub enum IciclesDspStatus {
     AnalysisFailed = 4,
     /// A panic was caught; the library stays usable.
     Panic = 5,
+    /// The deep analysis was cancelled through its control block.
+    Cancelled = 6,
 }
 
 /// The analysis output. Arrays are owned by the library: release them with
@@ -424,6 +427,240 @@ pub unsafe extern "C" fn icicles_dsp_free(out: *mut IciclesDspResult) {
     }));
 }
 
+/// The deep analysis output (see `crate::deep::DeepAnalysis`). Arrays are
+/// owned by the library: release them with [`icicles_dsp_free_deep`].
+#[repr(C)]
+#[derive(Debug)]
+pub struct IciclesDspDeepResult {
+    /// Sections covering the song: start and end in seconds, label index
+    /// (0 start, 1 end, 2 intro, 3 outro, 4 break, 5 bridge, 6 inst, 7 solo,
+    /// 8 verse, 9 chorus), `section_count` of each.
+    pub section_starts: *mut f32,
+    pub section_ends: *mut f32,
+    pub section_labels: *mut u8,
+    pub section_count: usize,
+    /// Stem loudness `0..1`, row-major `stem_rows × 4` (drums, bass, other,
+    /// vocals), one row every 10 ms (the feature matrix's rows).
+    pub stem_levels: *mut f32,
+    pub stem_rows: usize,
+    /// Chroma of the harmonic stems, row-major `chroma_rows × 12` (C … B),
+    /// 10 rows a second; each row sums to 1 (all zero in silence).
+    pub chroma: *mut f32,
+    pub chroma_rows: usize,
+}
+
+impl IciclesDspDeepResult {
+    const EMPTY: IciclesDspDeepResult = IciclesDspDeepResult {
+        section_starts: ptr::null_mut(),
+        section_ends: ptr::null_mut(),
+        section_labels: ptr::null_mut(),
+        section_count: 0,
+        stem_levels: ptr::null_mut(),
+        stem_rows: 0,
+        chroma: ptr::null_mut(),
+        chroma_rows: 0,
+    };
+}
+
+/// Runs the deep analysis (Demucs stems, stem loudness, chroma, All-In-One
+/// structure with `folds` of the 8 folds) of `len` mono samples at
+/// `sample_rate`. `model_dir` holds `htdemucs_core.onnx` and
+/// `allin1_fold{0..folds}.onnx`. `control` (may be NULL) receives the
+/// progress as f32 bits `0..1` and is polled for a non-zero cancel flag;
+/// cancelling returns [`IciclesDspStatus::Cancelled`].
+///
+/// # Safety
+/// `samples` must point to `len` readable `f32`s, `model_dir` be a valid C
+/// string, `control` NULL or valid for the whole call (another thread may
+/// read/write it), `out` writable.
+#[no_mangle]
+pub unsafe extern "C" fn icicles_dsp_analyze_deep(
+    samples: *const f32,
+    len: usize,
+    sample_rate: u32,
+    model_dir: *const c_char,
+    folds: u32,
+    control: *const Control,
+    out: *mut IciclesDspDeepResult,
+) -> i32 {
+    if out.is_null() {
+        set_last_error("out is null");
+        return IciclesDspStatus::InvalidArgument as i32;
+    }
+    ptr::write(out, IciclesDspDeepResult::EMPTY);
+    finish_deep(
+        catch_unwind(AssertUnwindSafe(|| {
+            let signal = checked_signal(samples, len, sample_rate)?;
+            if model_dir.is_null() {
+                return Err((
+                    IciclesDspStatus::InvalidArgument,
+                    "model_dir is null".into(),
+                ));
+            }
+            let dir = CStr::from_ptr(model_dir).to_str().map_err(|_| {
+                (
+                    IciclesDspStatus::InvalidArgument,
+                    "model_dir is not UTF-8".to_string(),
+                )
+            })?;
+            run_deep(
+                signal,
+                sample_rate,
+                &DeepModels::Dir(Path::new(dir)),
+                folds,
+                control,
+            )
+        })),
+        out,
+    )
+}
+
+/// Like [`icicles_dsp_analyze_deep`] with the models as bytes (the browser):
+/// the Demucs network and `fold_count` fold models (`folds[i]` of
+/// `fold_lens[i]` bytes); all of them run.
+///
+/// # Safety
+/// As [`icicles_dsp_analyze_deep`]; `demucs` must point to `demucs_len`
+/// bytes, `folds`/`fold_lens` to `fold_count` entries each pointing to its
+/// length of bytes.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn icicles_dsp_analyze_deep_models(
+    samples: *const f32,
+    len: usize,
+    sample_rate: u32,
+    demucs: *const u8,
+    demucs_len: usize,
+    folds: *const *const u8,
+    fold_lens: *const usize,
+    fold_count: usize,
+    control: *const Control,
+    out: *mut IciclesDspDeepResult,
+) -> i32 {
+    if out.is_null() {
+        set_last_error("out is null");
+        return IciclesDspStatus::InvalidArgument as i32;
+    }
+    ptr::write(out, IciclesDspDeepResult::EMPTY);
+    finish_deep(
+        catch_unwind(AssertUnwindSafe(|| {
+            let signal = checked_signal(samples, len, sample_rate)?;
+            if demucs.is_null()
+                || demucs_len == 0
+                || folds.is_null()
+                || fold_lens.is_null()
+                || fold_count == 0
+            {
+                return Err((
+                    IciclesDspStatus::ModelNotFound,
+                    "deep models missing".into(),
+                ));
+            }
+            let fold_bytes: Vec<&[u8]> = (0..fold_count)
+                .map(|i| std::slice::from_raw_parts(*folds.add(i), *fold_lens.add(i)))
+                .collect();
+            let models = DeepModels::Bytes {
+                demucs: std::slice::from_raw_parts(demucs, demucs_len),
+                folds: fold_bytes,
+            };
+            run_deep(signal, sample_rate, &models, fold_count as u32, control)
+        })),
+        out,
+    )
+}
+
+unsafe fn run_deep(
+    signal: &[f32],
+    sample_rate: u32,
+    models: &DeepModels<'_>,
+    folds: u32,
+    control: *const Control,
+) -> Result<IciclesDspDeepResult, Failure> {
+    let fallback = Control::default();
+    let control = if control.is_null() {
+        &fallback
+    } else {
+        &*control
+    };
+    let analysis =
+        deep::analyze(signal, sample_rate, models, folds as usize, control).map_err(|e| {
+            let status = match e {
+                DeepError::ModelNotFound(_) => IciclesDspStatus::ModelNotFound,
+                DeepError::ModelLoad(_) => IciclesDspStatus::ModelLoadFailed,
+                DeepError::Analysis(_) => IciclesDspStatus::AnalysisFailed,
+                DeepError::Cancelled => IciclesDspStatus::Cancelled,
+            };
+            (status, e.to_string())
+        })?;
+    let section_count = analysis.segments.len();
+    let (section_starts, _) = give_away(analysis.segments.iter().map(|s| s.start).collect());
+    let (section_ends, _) = give_away(analysis.segments.iter().map(|s| s.end).collect());
+    let (section_labels, _) = give_away(analysis.segments.iter().map(|s| s.label).collect());
+    let (stem_levels, _) = give_away(analysis.stem_levels);
+    let (chroma, _) = give_away(analysis.chroma);
+    Ok(IciclesDspDeepResult {
+        section_starts,
+        section_ends,
+        section_labels,
+        section_count,
+        stem_levels,
+        stem_rows: analysis.stem_rows,
+        chroma,
+        chroma_rows: analysis.chroma_rows,
+    })
+}
+
+type DeepOutcome = std::thread::Result<Result<IciclesDspDeepResult, Failure>>;
+
+unsafe fn finish_deep(outcome: DeepOutcome, out: *mut IciclesDspDeepResult) -> i32 {
+    match outcome {
+        Ok(Ok(result)) => {
+            set_last_error("");
+            ptr::write(out, result);
+            IciclesDspStatus::Ok as i32
+        }
+        Ok(Err((status, message))) => {
+            set_last_error(message);
+            status as i32
+        }
+        Err(panic) => {
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            set_last_error(format!("panic: {message}"));
+            IciclesDspStatus::Panic as i32
+        }
+    }
+}
+
+/// Releases the arrays of a deep result and zeroes it (NULL / zeroed: no-op).
+///
+/// # Safety
+/// `out` must be NULL or point to a result written by a deep entry point.
+#[no_mangle]
+pub unsafe extern "C" fn icicles_dsp_free_deep(out: *mut IciclesDspDeepResult) {
+    if out.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        let result = ptr::read(out);
+        take_back(result.section_starts, result.section_count);
+        take_back(result.section_ends, result.section_count);
+        take_back(result.section_labels, result.section_count);
+        take_back(result.stem_levels, result.stem_rows * 4);
+        take_back(result.chroma, result.chroma_rows * 12);
+        ptr::write(out, IciclesDspDeepResult::EMPTY);
+    }));
+}
+
+/// Size in bytes of the control block (`progress` f32 bits, `cancel` u32).
+#[no_mangle]
+pub extern "C" fn icicles_dsp_control_size() -> usize {
+    std::mem::size_of::<Control>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,5 +843,26 @@ mod tests {
         assert!(message.contains("adtof_frame_rnn.onnx"), "{message}");
         unsafe { icicles_dsp_free(&mut out) };
         assert!(out.drum_error.is_null());
+    }
+    #[test]
+    fn deep_without_models_is_reported() {
+        let samples = vec![0.0f32; 44_100];
+        let dir = CString::new("/nonexistent").unwrap();
+        let mut out = IciclesDspDeepResult::EMPTY;
+        let status = unsafe {
+            icicles_dsp_analyze_deep(
+                samples.as_ptr(),
+                samples.len(),
+                44_100,
+                dir.as_ptr(),
+                8,
+                ptr::null(),
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::ModelNotFound as i32);
+        assert!(last_error().contains("htdemucs_core.onnx"));
+        unsafe { icicles_dsp_free_deep(&mut out) };
+        assert_eq!(icicles_dsp_control_size(), 8);
     }
 }

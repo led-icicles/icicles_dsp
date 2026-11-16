@@ -85,4 +85,30 @@ void main() {
     );
     expect(dsp.analyze(Float32List(44100), 44100, mel: mel, beat: beat, drum: drum).features.frameCount, 100);
   });
+
+  test('reproduces the native deep analysis (needs tool/download-deep-models.sh)', () async {
+    final reference =
+        jsonDecode(utf8.decode(await packageFile('test/fixtures/deep_reference.json'))) as Map<String, Object?>;
+    final demucs = await packageFile('models/htdemucs_core.onnx');
+    final folds = [await packageFile('models/allin1_fold0.onnx'), await packageFile('models/allin1_fold1.onnx')];
+    final result = dsp.analyzeDeep(
+      clickTrack(bpm: 120, seconds: 12, sampleRate: 44100),
+      44100,
+      demucs: demucs,
+      folds: folds,
+    );
+    expect([
+      for (final s in result.sections) [s.start.inMilliseconds, s.end.inMilliseconds, s.label.name],
+    ], reference['sections']);
+    expect(result.stemRows, reference['stemRows']);
+    final sums = (reference['stemSums']! as List<Object?>).cast<num>();
+    for (final stem in DspStem.values) {
+      var sum = 0.0;
+      for (var r = 0; r < result.stemRows; r++) {
+        sum += result.stemLevel(r, stem);
+      }
+      expect(sum, closeTo(sums[stem.index], 1e-2 * (1 + sums[stem.index].abs())), reason: stem.name);
+    }
+    expect(result.chromaRows, reference['chromaRows']);
+  }, timeout: const Timeout(Duration(minutes: 10)));
 }

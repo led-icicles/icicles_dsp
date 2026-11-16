@@ -106,6 +106,32 @@ the two files as assets, copies them to a writable directory once and passes
 that path. The drum model `adtof_frame_rnn.onnx` is read from the same
 directory.
 
+### Deep analysis (stems and song structure)
+
+`IciclesDsp().analyzeDeep(mono, sampleRate, modelDir:, folds:, onProgress:, cancel:)`
+(and `IciclesDspWasm.analyzeDeep` in the browser) is a separate, slow pass:
+
+1. **Demucs** (`htdemucs_core.onnx`, `rust/src/demucs.rs`): the mono mix (as two
+   identical channels) is separated into drums, bass, other and vocals. The
+   segmenting (7.8 s, 25 % overlap, triangular cross-fade), track
+   normalization and the STFT/iSTFT around the ONNX core reproduce
+   `demucs.apply_model` + `HTDemucs._spec/_ispec` (`shifts=0`): 79–92 dB SNR
+   against PyTorch `demucs` 4.1.
+2. **Stem loudness**: a Hann-windowed RMS per stem every 10 ms (the rows of the
+   feature matrix), normalized like `level`, never by less than a quarter of
+   the mix's reference.
+3. **Chroma** of bass + other + vocals (no drums), 10 rows a second — for key
+   estimation by the caller.
+4. **All-In-One** (`allin1_fold{k}.onnx`, `rust/src/structure.rs`): madmom's
+   log-filtered spectrogram of each stem (`rust/src/spectrum.rs`, 81 bands,
+   equal to madmom within 1e-5), the mean logits of the folds, then
+   `allin1.postprocessing.functional` → sections labelled start, end, intro,
+   outro, break, bridge, inst, solo, verse, chorus.
+
+Progress and cancellation go through an `IciclesDspControl` block shared with
+the analysing thread (FFI only; the browser call blocks its worker).
+`tool/download-deep-models.sh` fetches the models (see `models/NOTICE.md`).
+
 ### Drum detection
 
 `rust/src/drums.rs` reproduces the model's training front end (madmom's log
@@ -213,3 +239,5 @@ the library stays usable.
 Apple M-series, release build, 3 minutes at 44.1 kHz: features in 0.21 s,
 beats (small model) in 1.45 s; through the Dart facade about 2.1 s in all.
 Drums: 390 s of music in about 6.4 s (spectrogram 0.3 s, model 6 s).
+Deep analysis of 3 minutes: about 68 s with 8 folds (Demucs 23 s, folds ~5.5 s
+each); in the browser (single-threaded WebAssembly) several minutes.

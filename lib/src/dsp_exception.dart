@@ -19,6 +19,9 @@ enum DspErrorKind {
   /// The native code panicked (caught; the library stays usable).
   nativePanic,
 
+  /// The deep analysis was cancelled.
+  cancelled,
+
   /// The native library returned a status this version does not know.
   unknown,
 }

@@ -2,6 +2,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 
 import '../dsp_analysis.dart';
+import '../dsp_deep_analysis.dart';
 import '../dsp_exception.dart';
 import '../dsp_result_data.dart';
 
@@ -72,6 +73,20 @@ final class IciclesDspWasm {
     return _Instance(this)
         .analyze(mono, sampleRate, mel, beat, drum, dspFlags(trackBeats: trackBeats, detectDrums: detectDrums));
   }
+
+  /// The deep analysis (Demucs stems → stem loudness, chroma, All-In-One
+  /// structure) with the models' bytes: the Demucs network and the fold
+  /// models to run (1–8). Several minutes single-threaded; no progress (the
+  /// call blocks the worker). Throws [DspException].
+  DspDeepAnalysis analyzeDeep(
+    Float32List mono,
+    int sampleRate, {
+    required Uint8List demucs,
+    required List<Uint8List> folds,
+  }) {
+    if (mono.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
+    return _Instance(this).analyzeDeep(mono, sampleRate, demucs, folds);
+  }
 }
 
 /// One instantiation of the module with its WASI shim.
@@ -133,6 +148,64 @@ final class _Instance {
     }
     return _read(out);
   }
+
+  DspDeepAnalysis analyzeDeep(Float32List mono, int sampleRate, Uint8List demucs, List<Uint8List> folds) {
+    final int status;
+    final int out;
+    try {
+      final samples = _put(mono.buffer.asUint8List(mono.offsetInBytes, mono.lengthInBytes));
+      final demucsAt = _put(demucs);
+      final foldAt = [for (final fold in folds) _put(fold)];
+      // Two u32 arrays (wasm32 pointers and usize): the fold pointers and lengths.
+      final table = Uint8List(8 * folds.length);
+      final view = ByteData.sublistView(table);
+      for (var i = 0; i < folds.length; i++) {
+        view
+          ..setUint32(4 * i, foldAt[i], Endian.little)
+          ..setUint32(4 * (folds.length + i), folds[i].length, Endian.little);
+      }
+      final tableAt = _put(table);
+      out = _u32(_exports.alloc(_deepResultSize));
+      status = _exports.analyzeDeepModels(
+        samples,
+        mono.length,
+        sampleRate,
+        demucsAt,
+        demucs.length,
+        tableAt,
+        tableAt + 4 * folds.length,
+        folds.length,
+        0,
+        out,
+      );
+    } on DspException {
+      rethrow;
+    } catch (error) {
+      final message = _stderr.toString().trim();
+      throw DspException(DspErrorKind.nativePanic, message.isEmpty ? '$error' : message);
+    }
+    if (status != 0) {
+      throw DspException(dspErrorKindOf(status), _cString(_u32(_exports.lastError())) ?? 'Status $status.');
+    }
+    final m = _memory;
+    int u(int field) => m.getUint32(out + 4 * field, Endian.little);
+    final buffer = _exports.memory.buffer.toDart;
+    Float32List floats(int pointer, int count) =>
+        count == 0 ? Float32List(0) : Float32List.fromList(buffer.asFloat32List(pointer, count));
+    final sections = u(3);
+    return DspDeepAnalysis.fromRaw(
+      sectionStarts: floats(u(0), sections),
+      sectionEnds: floats(u(1), sections),
+      sectionLabels: sections == 0 ? Uint8List(0) : Uint8List.fromList(buffer.asUint8List(u(2), sections)),
+      stemLevels: floats(u(4), u(5) * DspStem.values.length),
+      stemRows: u(5),
+      chroma: floats(u(6), u(7) * 12),
+      chromaRows: u(7),
+    );
+  }
+
+  /// `sizeof(IciclesDspDeepResult)` on wasm32: 8 pointer-sized fields.
+  static const _deepResultSize = 32;
 
   /// The `IciclesDspResult` at [at] (wasm32 layout: pointers and `usize`
   /// are 4 bytes, see `rust/src/ffi.rs`), copied out of the module memory.
@@ -284,6 +357,20 @@ extension type _Exports._(JSObject _) implements JSObject {
 
   @JS('icicles_dsp_last_error')
   external int lastError();
+
+  @JS('icicles_dsp_analyze_deep_models')
+  external int analyzeDeepModels(
+    int samples,
+    int length,
+    int sampleRate,
+    int demucs,
+    int demucsLength,
+    int folds,
+    int foldLengths,
+    int foldCount,
+    int control,
+    int out,
+  );
 
   @JS('icicles_dsp_analyze_models')
   external int analyzeModels(

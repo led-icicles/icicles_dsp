@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' as ffi;
 import 'dart:io';
@@ -7,6 +8,7 @@ import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
 import 'dsp_analysis.dart';
+import 'dsp_deep_analysis.dart';
 import 'dsp_result_data.dart';
 import 'dsp_exception.dart';
 import 'icicles_dsp_bindings_generated.dart' as bindings;
@@ -31,6 +33,18 @@ final class IciclesDsp {
 
   /// File name of the bundled drum model (ADTOF Frame_RNN, about 2 MB).
   static const drumModelFile = 'adtof_frame_rnn.onnx';
+
+  /// File name of the Demucs network of the deep analysis.
+  static const demucsModelFile = 'htdemucs_core.onnx';
+
+  /// Number of All-In-One folds of the deep analysis.
+  static const foldCount = 8;
+
+  /// File name of All-In-One fold [k] (`0 ≤ k < foldCount`).
+  static String foldModelFile(int k) => 'allin1_fold$k.onnx';
+
+  /// Every model file the deep analysis reads with all folds.
+  static List<String> get deepModelFiles => [demucsModelFile, for (var k = 0; k < foldCount; k++) foldModelFile(k)];
 
   /// Whether the native library can be loaded on this platform.
   static bool get isAvailable => version != null;
@@ -196,6 +210,143 @@ final class IciclesDsp {
       calloc.free(out);
       calloc.free(samples);
       if (path != ffi.nullptr) calloc.free(path);
+    }
+  }
+
+  /// The deep analysis of [mono] PCM at [sampleRate] on a background
+  /// isolate: Demucs stems → per-stem loudness, harmonic chroma and the
+  /// All-In-One song structure, with [folds] of the [foldCount] folds (fewer
+  /// is faster and slightly less accurate). Reads [demucsModelFile] and the
+  /// fold files from [modelDir] (default [bundledModelDir]). About a minute
+  /// of CPU for a 3-minute song on Apple silicon.
+  ///
+  /// [onProgress] receives `0..1` a few times a second; completing [cancel]
+  /// stops the analysis with [DspErrorKind.cancelled].
+  ///
+  /// Throws [DspException].
+  Future<DspDeepAnalysis> analyzeDeep(
+    Float32List mono,
+    int sampleRate, {
+    String? modelDir,
+    int folds = foldCount,
+    void Function(double fraction)? onProgress,
+    Future<void>? cancel,
+  }) async {
+    if (mono.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
+    if (sampleRate < 1000) {
+      throw DspException(DspErrorKind.invalidArgument, 'Sample rate $sampleRate Hz is below the 1000 Hz minimum.');
+    }
+    final models = modelDir ?? await bundledModelDir();
+    if (models == null) {
+      throw const DspException(DspErrorKind.modelNotFound, 'No model directory: pass modelDir.');
+    }
+    // The control block lives on the native heap, shared with the isolate
+    // that runs the analysis: progress is read from here, cancel written.
+    final control = calloc<bindings.IciclesDspControl>();
+    var done = false;
+    final poll = onProgress == null
+        ? null
+        : Timer.periodic(const Duration(milliseconds: 250), (_) {
+            if (!done) onProgress(_progressOf(control));
+          });
+    unawaited(
+      cancel?.then((_) {
+        if (!done) control.ref.cancel = 1;
+      }),
+    );
+    try {
+      final wire = await _runDeep(mono, sampleRate, models, folds, control.address);
+      onProgress?.call(1);
+      return DspDeepAnalysis.fromWire(wire);
+    } finally {
+      done = true;
+      poll?.cancel();
+      calloc.free(control);
+    }
+  }
+
+  /// Spawns the deep analysis isolate from a scope that captures nothing
+  /// but sendable values (closures share their enclosing context).
+  static Future<Map<String, Object?>> _runDeep(
+    Float32List mono,
+    int sampleRate,
+    String modelDir,
+    int folds,
+    int controlAddress,
+  ) {
+    final transfer = TransferableTypedData.fromList([mono]);
+    return Isolate.run(
+      () => analyzeDeepSync(
+        transfer.materialize().asFloat32List(),
+        sampleRate,
+        modelDir: modelDir,
+        folds: folds,
+        controlAddress: controlAddress,
+      ).toWire(),
+    );
+  }
+
+  static double _progressOf(ffi.Pointer<bindings.IciclesDspControl> control) {
+    final bits = ByteData(4)..setUint32(0, control.ref.progress, Endian.host);
+    return bits.getFloat32(0, Endian.host).clamp(0.0, 1.0);
+  }
+
+  /// The synchronous native call behind [analyzeDeep]; blocks the calling
+  /// isolate. [controlAddress] is the address of an `IciclesDspControl`
+  /// (0 = none).
+  static DspDeepAnalysis analyzeDeepSync(
+    Float32List mono,
+    int sampleRate, {
+    required String modelDir,
+    int folds = foldCount,
+    int controlAddress = 0,
+  }) {
+    final samples = calloc<ffi.Float>(mono.length);
+    final out = calloc<bindings.IciclesDspDeepResult>();
+    final path = modelDir.toNativeUtf8();
+    try {
+      samples.asTypedList(mono.length).setAll(0, mono);
+      final int status;
+      try {
+        status = bindings.icicles_dsp_analyze_deep(
+          samples,
+          mono.length,
+          sampleRate,
+          path.cast(),
+          folds,
+          ffi.Pointer.fromAddress(controlAddress),
+          out,
+        );
+      } on Error catch (e) {
+        throw DspException(DspErrorKind.libraryUnavailable, 'The icicles_dsp native library is not available: $e');
+      }
+      if (status != bindings.IciclesDspStatus.ICICLES_DSP_OK.value) {
+        final message = bindings.icicles_dsp_last_error().cast<Utf8>().toDartString();
+        throw DspException(dspErrorKindOf(status), message.isEmpty ? 'Native status $status.' : message);
+      }
+      final r = out.ref;
+      Float32List floats(ffi.Pointer<ffi.Float> pointer, int count) =>
+          count == 0 ? Float32List(0) : Float32List.fromList(pointer.asTypedList(count));
+      return DspDeepAnalysis.fromRaw(
+        sectionStarts: floats(r.section_starts, r.section_count),
+        sectionEnds: floats(r.section_ends, r.section_count),
+        sectionLabels: r.section_count == 0
+            ? Uint8List(0)
+            : Uint8List.fromList(r.section_labels.asTypedList(r.section_count)),
+        stemLevels: floats(r.stem_levels, r.stem_rows * DspStem.values.length),
+        stemRows: r.stem_rows,
+        chroma: floats(r.chroma, r.chroma_rows * 12),
+        chromaRows: r.chroma_rows,
+      );
+    } finally {
+      try {
+        bindings.icicles_dsp_free_deep(out);
+      } on Error {
+        // The library is unavailable: nothing was allocated natively.
+      }
+      calloc.free(out);
+      calloc.free(samples);
+      calloc.free(path);
     }
   }
 }

@@ -66,3 +66,67 @@ The ADTOF work, including the model weights, is licensed under the
 License](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0):
 non-commercial use only, with attribution, and adaptations under the same
 license. The rest of this package stays MIT.
+
+## Deep analysis models (downloaded, not committed)
+
+`tool/download-deep-models.sh` fetches ONNX conversions published by LightCut
+(`azstorm/lightcut-music-analysis-models` on Hugging Face, MIT, pinned to
+commit `971366ce07f76f7236b6bca636e162ecc12e985f`, SHA-256 checked) and stores
+them under these names:
+
+| File | Size | Role |
+| --- | --- | --- |
+| `htdemucs_core.onnx` | ~174 MB | Hybrid Transformer Demucs (`htdemucs`) network, 4 stems |
+| `allin1_fold0..7.onnx` | ~3.4 MB each | All-In-One (`harmonix-all`) fold models: song structure |
+
+Hybrid Transformer Demucs, Alexandre Défossez (Meta), MIT License:
+
+```
+MIT License
+
+Copyright (c) Meta Platforms, Inc. and affiliates.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+All-In-One Music Structure Analyzer, Taejun Kim and Juhan Nam (WASPAA 2023), MIT License:
+
+```
+MIT License
+
+Copyright (c) 2023 Taejun Kim
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

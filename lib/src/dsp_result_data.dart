@@ -86,6 +86,7 @@ DspErrorKind dspErrorKindOf(int status) => switch (status) {
   3 => DspErrorKind.modelLoadFailed,
   4 => DspErrorKind.analysisFailed,
   5 => DspErrorKind.nativePanic,
+  6 => DspErrorKind.cancelled,
   _ => DspErrorKind.unknown,
 };
 

@@ -160,7 +160,7 @@ impl Extractor {
 
     fn run(&mut self, samples: &[f32]) -> AudioFeatures {
         let rate = self.sample_rate as usize;
-        let frame_count = (samples.len() * 100 + rate - 1) / rate;
+        let frame_count = (samples.len() * 100).div_ceil(rate);
         let mut data = vec![0.0f32; frame_count * COLUMN_COUNT];
         for frame in 0..frame_count {
             self.compute_frame(
