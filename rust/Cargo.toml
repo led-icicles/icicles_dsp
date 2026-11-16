@@ -1,6 +1,6 @@
 [package]
 name = "icicles_dsp"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Native audio analysis for icicles animations: Beat This! beat tracking, ADTOF drum hits, Demucs stems, All-In-One song structure and the icicles_generators feature matrix behind a C ABI."
@@ -19,8 +19,11 @@ rten = "0.24"
 rten-tensor = "0.24"
 rubato = "3.0"
 rustfft = "6"
+ogg = "0.9"
+rusty_vorbis = { version = "0.1.3", default-features = false }
 
 [dev-dependencies]
+lewton = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -34,3 +37,8 @@ panic = "unwind"
 # debug opt-level for fast incremental builds).
 [profile.dev.package."*"]
 opt-level = 3
+
+# A copy of rusty_vorbis that encodes on the calling thread when only one is
+# available (wasm32-wasip1 has no threads); see vendor/rusty_vorbis/PATCHED.md.
+[patch.crates-io]
+rusty_vorbis = { path = "vendor/rusty_vorbis" }

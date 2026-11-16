@@ -90,6 +90,15 @@ final class IciclesDspWasm {
     if (mono.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
     return _Instance(this).analyzeDeep(mono, sampleRate, demucs, folds, drum);
   }
+
+  /// [interleaved] f32 PCM (`-1..1`, [channels] 1 or 2) at [sampleRate] Hz
+  /// as an Ogg Vorbis file (always stereo) at Vorbis quality [quality]
+  /// (`-1..10`) — byte-identical to the desktop `IciclesDsp.encodeVorbis`.
+  /// Synchronous: call it on a Web Worker. Throws [DspException].
+  Uint8List encodeVorbis(Float32List interleaved, {required int channels, required int sampleRate, double quality = 5}) {
+    if (interleaved.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
+    return _Instance(this).encodeVorbis(interleaved, channels, sampleRate, quality);
+  }
 }
 
 /// One instantiation of the module with its WASI shim.
@@ -150,6 +159,28 @@ final class _Instance {
       throw DspException(dspErrorKindOf(status), _cString(_u32(_exports.lastError())) ?? 'Status $status.');
     }
     return _read(out);
+  }
+
+  Uint8List encodeVorbis(Float32List interleaved, int channels, int sampleRate, double quality) {
+    final int status;
+    final int out;
+    try {
+      final samples = _put(interleaved.buffer.asUint8List(interleaved.offsetInBytes, interleaved.lengthInBytes));
+      // The out pointer and length (u32 each on wasm32).
+      out = _u32(_exports.alloc(8));
+      status = _exports.encodeVorbis(samples, interleaved.length, channels, sampleRate, quality, out, out + 4);
+    } on DspException {
+      rethrow;
+    } catch (error) {
+      final message = _stderr.toString().trim();
+      throw DspException(DspErrorKind.nativePanic, message.isEmpty ? '$error' : message);
+    }
+    if (status != 0) {
+      throw DspException(dspErrorKindOf(status), _cString(_u32(_exports.lastError())) ?? 'Status $status.');
+    }
+    final memory = _memory;
+    final at = memory.getUint32(out, Endian.little), length = memory.getUint32(out + 4, Endian.little);
+    return Uint8List.fromList(_bytes.sublist(at, at + length));
   }
 
   DspDeepAnalysis analyzeDeep(
@@ -390,6 +421,9 @@ extension type _Exports._(JSObject _) implements JSObject {
     int control,
     int out,
   );
+
+  @JS('icicles_dsp_encode_vorbis')
+  external int encodeVorbis(int samples, int length, int channels, int sampleRate, double quality, int out, int outLength);
 
   @JS('icicles_dsp_analyze_models')
   external int analyzeModels(

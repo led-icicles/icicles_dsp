@@ -103,6 +103,17 @@ uint8_t *icicles_dsp_alloc(size_t len);
 // Releases a block of icicles_dsp_alloc (with the same `len`).
 void icicles_dsp_dealloc(uint8_t *pointer, size_t len);
 
+// Encodes `len` interleaved f32 samples (`channels` 1 or 2, -1..1) at
+// `sample_rate` Hz as an Ogg Vorbis file (always stereo) at Vorbis quality
+// `quality` (-1..10). On success *out / *out_len hold the file, released with
+// icicles_dsp_free_bytes; on failure they are NULL / 0 and the status names
+// the cause (details in icicles_dsp_last_error).
+int32_t icicles_dsp_encode_vorbis(const float *samples, size_t len, uint32_t channels, uint32_t sample_rate,
+                                  float quality, uint8_t **out, size_t *out_len);
+
+// Releases a byte array of icicles_dsp_encode_vorbis.
+void icicles_dsp_free_bytes(uint8_t *pointer, size_t len);
+
 // Releases the arrays of a result filled by icicles_dsp_analyze and zeroes it.
 // NULL and already-freed results are no-ops.
 void icicles_dsp_free(IciclesDspResult *out);

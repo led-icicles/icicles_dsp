@@ -216,6 +216,60 @@ final class IciclesDsp {
     }
   }
 
+  /// Default Vorbis quality of [encodeVorbis] (`-q 5`, about 160 kbit/s on
+  /// music).
+  static const defaultVorbisQuality = 5.0;
+
+  /// [interleaved] f32 PCM (`-1..1`, [channels] 1 or 2) at [sampleRate] Hz
+  /// as an Ogg Vorbis file (always stereo; mono is duplicated) at Vorbis
+  /// quality [quality] (`-1..10`), encoded on a background isolate.
+  ///
+  /// Throws [DspException].
+  Future<Uint8List> encodeVorbis(
+    Float32List interleaved, {
+    required int channels,
+    required int sampleRate,
+    double quality = defaultVorbisQuality,
+  }) {
+    final transfer = TransferableTypedData.fromList([interleaved]);
+    return Isolate.run(() => encodeVorbisSync(transfer.materialize().asFloat32List(),
+        channels: channels, sampleRate: sampleRate, quality: quality));
+  }
+
+  /// The synchronous native call behind [encodeVorbis].
+  static Uint8List encodeVorbisSync(
+    Float32List interleaved, {
+    required int channels,
+    required int sampleRate,
+    double quality = defaultVorbisQuality,
+  }) {
+    if (interleaved.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
+    final samples = calloc<ffi.Float>(interleaved.length);
+    final out = calloc<ffi.Pointer<ffi.Uint8>>();
+    final outLength = calloc<ffi.Size>();
+    try {
+      samples.asTypedList(interleaved.length).setAll(0, interleaved);
+      final int status;
+      try {
+        status = bindings.icicles_dsp_encode_vorbis(
+            samples, interleaved.length, channels, sampleRate, quality, out, outLength);
+      } on Error catch (e) {
+        throw DspException(DspErrorKind.libraryUnavailable, 'The icicles_dsp native library is not available: $e');
+      }
+      if (status != bindings.IciclesDspStatus.ICICLES_DSP_OK.value) {
+        final message = bindings.icicles_dsp_last_error().cast<Utf8>().toDartString();
+        throw DspException(dspErrorKindOf(status), message.isEmpty ? 'Native status $status.' : message);
+      }
+      final bytes = Uint8List.fromList(out.value.asTypedList(outLength.value));
+      bindings.icicles_dsp_free_bytes(out.value, outLength.value);
+      return bytes;
+    } finally {
+      calloc.free(samples);
+      calloc.free(out);
+      calloc.free(outLength);
+    }
+  }
+
   /// The deep analysis of [mono] PCM at [sampleRate] on a background
   /// isolate: Demucs stems → per-stem loudness, harmonic chroma, the drum
   /// hits of the drum stem and the All-In-One song structure, with [folds] of

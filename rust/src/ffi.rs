@@ -1042,3 +1042,63 @@ mod tests {
         assert!(out.drum_error.is_null());
     }
 }
+
+/// Encodes `len` interleaved f32 samples (`channels` 1 or 2, `-1..1`) at
+/// `sample_rate` Hz as an Ogg Vorbis file at Vorbis quality `quality`
+/// (`-1..=10`). On success `*out` / `*out_len` hold the file (release it
+/// with [`icicles_dsp_free_bytes`]); on failure they are NULL / 0 and the
+/// status names the cause, with details in [`icicles_dsp_last_error`].
+///
+/// # Safety
+/// `samples` must point to `len` readable `f32`s; `out` and `out_len` must
+/// be writable.
+#[no_mangle]
+pub unsafe extern "C" fn icicles_dsp_encode_vorbis(
+    samples: *const f32,
+    len: usize,
+    channels: u32,
+    sample_rate: u32,
+    quality: f32,
+    out: *mut *mut u8,
+    out_len: *mut usize,
+) -> i32 {
+    if out.is_null() || out_len.is_null() {
+        set_last_error("out is null");
+        return IciclesDspStatus::InvalidArgument as i32;
+    }
+    ptr::write(out, ptr::null_mut());
+    ptr::write(out_len, 0);
+    if samples.is_null() || len == 0 {
+        set_last_error("no samples");
+        return IciclesDspStatus::InvalidArgument as i32;
+    }
+    let pcm = std::slice::from_raw_parts(samples, len);
+    match catch_unwind(AssertUnwindSafe(|| {
+        crate::encode::encode_vorbis(pcm, channels as usize, sample_rate, quality)
+    })) {
+        Ok(Ok(bytes)) => {
+            let (pointer, length) = give_away(bytes);
+            ptr::write(out, pointer);
+            ptr::write(out_len, length);
+            set_last_error("");
+            IciclesDspStatus::Ok as i32
+        }
+        Ok(Err(error)) => {
+            set_last_error(format!("{error:#}"));
+            IciclesDspStatus::InvalidArgument as i32
+        }
+        Err(_) => {
+            set_last_error("panic while encoding");
+            IciclesDspStatus::Panic as i32
+        }
+    }
+}
+
+/// Releases a byte array returned by [`icicles_dsp_encode_vorbis`].
+///
+/// # Safety
+/// `pointer`/`len` must come from that call and not have been freed.
+#[no_mangle]
+pub unsafe extern "C" fn icicles_dsp_free_bytes(pointer: *mut u8, len: usize) {
+    take_back(pointer, len);
+}

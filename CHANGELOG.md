@@ -1,3 +1,13 @@
+## 0.6.0
+
+- Ogg Vorbis encoding: `IciclesDsp().encodeVorbis` / `encodeVorbisSync` (FFI, background isolate) and
+  `IciclesDspWasm.encodeVorbis` (browser, synchronous — call it on a Web Worker), byte-identical; C ABI
+  `icicles_dsp_encode_vorbis` + `icicles_dsp_free_bytes`. Pure Rust (`rusty_vorbis` + `ogg`): always a stereo
+  stream (mono is duplicated), the decoded length is the input length, quality on the Vorbis `-q` scale.
+  `rust/vendor/rusty_vorbis` is a patched copy (Apache-2.0) that encodes on the calling thread when only one is
+  available — wasm32-wasip1 has no threads.
+- Depends on `icicles_generators` v0.11.0.
+
 ## 0.5.0
 
 - Depends on `icicles_generators` 0.10.0.

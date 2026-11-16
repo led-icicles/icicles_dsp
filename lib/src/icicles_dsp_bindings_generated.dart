@@ -91,6 +91,36 @@ external ffi.Pointer<ffi.Uint8> icicles_dsp_alloc(int len);
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.Size)>()
 external void icicles_dsp_dealloc(ffi.Pointer<ffi.Uint8> pointer, int len);
 
+/// Encodes `len` interleaved f32 samples (`channels` 1 or 2, -1..1) at
+/// `sample_rate` Hz as an Ogg Vorbis file (always stereo) at Vorbis quality
+/// `quality` (-1..10). On success *out / *out_len hold the file, released with
+/// icicles_dsp_free_bytes; on failure they are NULL / 0 and the status names
+/// the cause (details in icicles_dsp_last_error).
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Float>,
+    ffi.Size,
+    ffi.Uint32,
+    ffi.Uint32,
+    ffi.Float,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int icicles_dsp_encode_vorbis(
+  ffi.Pointer<ffi.Float> samples,
+  int len,
+  int channels,
+  int sample_rate,
+  double quality,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> out,
+  ffi.Pointer<ffi.Size> out_len,
+);
+
+/// Releases a byte array of icicles_dsp_encode_vorbis.
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.Size)>()
+external void icicles_dsp_free_bytes(ffi.Pointer<ffi.Uint8> pointer, int len);
+
 /// Releases the arrays of a result filled by icicles_dsp_analyze and zeroes it.
 /// NULL and already-freed results are no-ops.
 @ffi.Native<ffi.Void Function(ffi.Pointer<IciclesDspResult>)>()

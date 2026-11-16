@@ -132,4 +132,23 @@ void main() {
     expect(noDrum.drumError, contains('adtof_frame_rnn.onnx'));
     expect(noDrum.sections, isNotEmpty);
   }, timeout: const Timeout(Duration(minutes: 10)));
+
+  test('encodes Ogg Vorbis byte for byte like the native build', () async {
+    final reference =
+        jsonDecode(utf8.decode(await packageFile('test/fixtures/vorbis_reference.json'))) as Map<String, Object?>;
+    final mono = clickTrack(bpm: 120, seconds: 2, sampleRate: 44100);
+    final stereo = Float32List(mono.length * 2);
+    for (var i = 0; i < mono.length; i++) {
+      stereo[2 * i] = mono[i];
+      stereo[2 * i + 1] = mono[i] * 0.5;
+    }
+    final ogg = dsp.encodeVorbis(stereo, channels: 2, sampleRate: 44100);
+    var h = 0x811c9dc5;
+    for (final b in ogg) {
+      final x = h ^ b;
+      // 32-bit safe under JavaScript numbers.
+      h = ((x & 0xffff) * 0x01000193 + (((x >> 16) * 0x0193 & 0xffff) << 16)) & 0xffffffff;
+    }
+    expect({'length': ogg.length, 'fnv': h.toRadixString(16).padLeft(8, '0')}, reference);
+  });
 }

@@ -17,6 +17,7 @@ pub mod beats;
 pub mod deep;
 pub mod demucs;
 pub mod drums;
+pub mod encode;
 pub mod features;
 pub mod ffi;
 pub mod model;
