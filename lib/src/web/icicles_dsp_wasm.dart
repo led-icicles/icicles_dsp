@@ -74,18 +74,21 @@ final class IciclesDspWasm {
         .analyze(mono, sampleRate, mel, beat, drum, dspFlags(trackBeats: trackBeats, detectDrums: detectDrums));
   }
 
-  /// The deep analysis (Demucs stems → stem loudness, chroma, All-In-One
-  /// structure) with the models' bytes: the Demucs network and the fold
-  /// models to run (1–8). Several minutes single-threaded; no progress (the
-  /// call blocks the worker). Throws [DspException].
+  /// The deep analysis (Demucs stems → stem loudness, chroma, drum hits of
+  /// the drum stem, All-In-One structure) with the models' bytes: the Demucs
+  /// network, the fold models to run (1–8) and the optional [drum] model
+  /// (ADTOF; without it only the drums are missing,
+  /// [DspDeepAnalysis.drumError]). Several minutes single-threaded; no
+  /// progress (the call blocks the worker). Throws [DspException].
   DspDeepAnalysis analyzeDeep(
     Float32List mono,
     int sampleRate, {
     required Uint8List demucs,
     required List<Uint8List> folds,
+    Uint8List? drum,
   }) {
     if (mono.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
-    return _Instance(this).analyzeDeep(mono, sampleRate, demucs, folds);
+    return _Instance(this).analyzeDeep(mono, sampleRate, demucs, folds, drum);
   }
 }
 
@@ -149,7 +152,13 @@ final class _Instance {
     return _read(out);
   }
 
-  DspDeepAnalysis analyzeDeep(Float32List mono, int sampleRate, Uint8List demucs, List<Uint8List> folds) {
+  DspDeepAnalysis analyzeDeep(
+    Float32List mono,
+    int sampleRate,
+    Uint8List demucs,
+    List<Uint8List> folds,
+    Uint8List? drum,
+  ) {
     final int status;
     final int out;
     try {
@@ -165,6 +174,7 @@ final class _Instance {
           ..setUint32(4 * (folds.length + i), folds[i].length, Endian.little);
       }
       final tableAt = _put(table);
+      final drumAt = drum == null ? 0 : _put(drum);
       out = _u32(_exports.alloc(_deepResultSize));
       status = _exports.analyzeDeepModels(
         samples,
@@ -175,6 +185,8 @@ final class _Instance {
         tableAt,
         tableAt + 4 * folds.length,
         folds.length,
+        drumAt,
+        drum?.length ?? 0,
         0,
         out,
       );
@@ -192,7 +204,7 @@ final class _Instance {
     final buffer = _exports.memory.buffer.toDart;
     Float32List floats(int pointer, int count) =>
         count == 0 ? Float32List(0) : Float32List.fromList(buffer.asFloat32List(pointer, count));
-    final sections = u(3);
+    final sections = u(3), drumCount = u(11);
     return DspDeepAnalysis.fromRaw(
       sectionStarts: floats(u(0), sections),
       sectionEnds: floats(u(1), sections),
@@ -201,11 +213,16 @@ final class _Instance {
       stemRows: u(5),
       chroma: floats(u(6), u(7) * 12),
       chromaRows: u(7),
+      drumTimes: floats(u(8), drumCount),
+      drumClasses: drumCount == 0 ? Uint8List(0) : Uint8List.fromList(buffer.asUint8List(u(9), drumCount)),
+      drumStrengths: floats(u(10), drumCount),
+      drumError: _cString(u(13)),
     );
   }
 
-  /// `sizeof(IciclesDspDeepResult)` on wasm32: 8 pointer-sized fields.
-  static const _deepResultSize = 32;
+  /// `sizeof(IciclesDspDeepResult)` on wasm32: 12 pointer-sized fields,
+  /// `drum_status` (i32) and `drum_error`.
+  static const _deepResultSize = 56;
 
   /// The `IciclesDspResult` at [at] (wasm32 layout: pointers and `usize`
   /// are 4 bytes, see `rust/src/ffi.rs`), copied out of the module memory.
@@ -368,6 +385,8 @@ extension type _Exports._(JSObject _) implements JSObject {
     int folds,
     int foldLengths,
     int foldCount,
+    int drum,
+    int drumLength,
     int control,
     int out,
   );

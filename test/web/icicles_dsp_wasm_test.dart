@@ -96,6 +96,7 @@ void main() {
       44100,
       demucs: demucs,
       folds: folds,
+      drum: drum,
     );
     expect([
       for (final s in result.sections) [s.start.inMilliseconds, s.end.inMilliseconds, s.label.name],
@@ -110,5 +111,25 @@ void main() {
       expect(sum, closeTo(sums[stem.index], 1e-2 * (1 + sums[stem.index].abs())), reason: stem.name);
     }
     expect(result.chromaRows, reference['chromaRows']);
+    // The drums of the drum stem: the stems differ from the native ones in
+    // the last float bits, so hit times may move by a frame (10 ms).
+    expect(result.drumError, isNull);
+    final kicks = ((reference['drums']! as Map<String, Object?>)['kick']! as List<Object?>).cast<int>();
+    expect(kicks, isNotEmpty);
+    final actual = [for (final h in result.drums!.of(DrumClass.kick)) h.time.inMicroseconds];
+    expect(actual, hasLength(kicks.length));
+    for (var i = 0; i < kicks.length; i++) {
+      expect(actual[i], closeTo(kicks[i], 20000), reason: 'kick $i');
+    }
+
+    final noDrum = dsp.analyzeDeep(
+      clickTrack(bpm: 120, seconds: 6, sampleRate: 44100),
+      44100,
+      demucs: demucs,
+      folds: [folds.first],
+    );
+    expect(noDrum.drums, isNull);
+    expect(noDrum.drumError, contains('adtof_frame_rnn.onnx'));
+    expect(noDrum.sections, isNotEmpty);
   }, timeout: const Timeout(Duration(minutes: 10)));
 }

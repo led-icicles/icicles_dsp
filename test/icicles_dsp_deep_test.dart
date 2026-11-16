@@ -29,6 +29,55 @@ Float32List song() {
 }
 
 void main() {
+  test('the wire form carries the drum hits and the drum error', () {
+    final analysis = DspDeepAnalysis.fromRaw(
+      sectionStarts: Float32List.fromList([0]),
+      sectionEnds: Float32List.fromList([2]),
+      sectionLabels: Uint8List.fromList([DspSectionLabel.intro.index]),
+      stemLevels: Float32List(8),
+      stemRows: 2,
+      chroma: Float32List(12),
+      chromaRows: 1,
+      drumTimes: Float32List.fromList([0.5, 0.25, 1, 0.75]),
+      drumClasses: Uint8List.fromList([0, 3, 0, 9]),
+      drumStrengths: Float32List.fromList([1, 0.5, 0.25, 1]),
+    );
+    void expectDrums(DspDeepAnalysis a) {
+      expect(
+        [for (final h in a.drums!.of(DrumClass.kick)) h.time],
+        [const Duration(milliseconds: 500), const Duration(seconds: 1)],
+      );
+      expect(a.drums!.of(DrumClass.kick).last.strength, 0.25);
+      expect([for (final h in a.drums!.of(DrumClass.hihat)) h.time], [const Duration(milliseconds: 250)]);
+      expect(a.drums!.count, 3, reason: 'class 9 is unknown and dropped');
+      expect(a.drums!.source, DrumHits.sourceAdtof);
+      expect(a.drumError, isNull);
+    }
+
+    expectDrums(analysis);
+    expectDrums(DspDeepAnalysis.fromWire(analysis.toWire()));
+
+    final failed = DspDeepAnalysis.fromRaw(
+      sectionStarts: Float32List(0),
+      sectionEnds: Float32List(0),
+      sectionLabels: Uint8List(0),
+      stemLevels: Float32List(0),
+      stemRows: 0,
+      chroma: Float32List(0),
+      chromaRows: 0,
+      drumTimes: Float32List(0),
+      drumClasses: Uint8List(0),
+      drumStrengths: Float32List(0),
+      drumError: 'drum model not found: adtof_frame_rnn.onnx',
+    );
+    final back = DspDeepAnalysis.fromWire(failed.toWire());
+    expect(back.drums, isNull);
+    expect(back.drumError, failed.drumError);
+    // An older wire without drum entries.
+    final wire = analysis.toWire()..removeWhere((key, _) => key.startsWith('drum'));
+    expect(DspDeepAnalysis.fromWire(wire).drums, isNull);
+  });
+
   late String modelDir;
   var available = false;
 
@@ -83,6 +132,29 @@ void main() {
       sum += result.chroma[50 * 12 + c];
     }
     expect(sum, closeTo(1, 1e-3));
+    // Drums of the drum stem. The 33 ms 60 Hz blip of song() is a weak kick
+    // (the first pass finds none on the mix); hits must still only come
+    // where it plays. One kick per beat is pinned in rust/tests/deep.rs.
+    expect(result.drumError, isNull);
+    final kicks = result.drums!.of(DrumClass.kick);
+    expect(kicks, isNotEmpty);
+    expect(kicks.every((h) => h.time >= const Duration(milliseconds: 11900)), isTrue, reason: '$kicks');
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('without the drum model the deep analysis has no drums, only the reason', () async {
+    if (!available) {
+      markTestSkipped('deep models missing: run tool/download-deep-models.sh');
+      return;
+    }
+    final dir = Directory.systemTemp.createTempSync('deep-no-drums-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    for (final file in [IciclesDsp.demucsModelFile, IciclesDsp.foldModelFile(0)]) {
+      Link('${dir.path}/$file').createSync('$modelDir/$file');
+    }
+    final result = await const IciclesDsp().analyzeDeep(song(), 44100, modelDir: dir.path, folds: 1);
+    expect(result.sections, isNotEmpty);
+    expect(result.drums, isNull);
+    expect(result.drumError, contains(IciclesDsp.drumModelFile));
   }, timeout: const Timeout(Duration(minutes: 5)));
 
   test('cancelling stops the analysis', () async {

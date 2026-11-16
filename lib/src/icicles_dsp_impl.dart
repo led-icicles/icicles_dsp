@@ -43,7 +43,10 @@ final class IciclesDsp {
   /// File name of All-In-One fold [k] (`0 ≤ k < foldCount`).
   static String foldModelFile(int k) => 'allin1_fold$k.onnx';
 
-  /// Every model file the deep analysis reads with all folds.
+  /// Every model file the deep analysis needs with all folds. The drum model
+  /// ([drumModelFile]) is optional for it: read from the same directory when
+  /// present (drums of the drum stem), else [DspDeepAnalysis.drums] is `null`
+  /// and [DspDeepAnalysis.drumError] says why.
   static List<String> get deepModelFiles => [demucsModelFile, for (var k = 0; k < foldCount; k++) foldModelFile(k)];
 
   /// Whether the native library can be loaded on this platform.
@@ -214,11 +217,13 @@ final class IciclesDsp {
   }
 
   /// The deep analysis of [mono] PCM at [sampleRate] on a background
-  /// isolate: Demucs stems → per-stem loudness, harmonic chroma and the
-  /// All-In-One song structure, with [folds] of the [foldCount] folds (fewer
-  /// is faster and slightly less accurate). Reads [demucsModelFile] and the
-  /// fold files from [modelDir] (default [bundledModelDir]). About a minute
-  /// of CPU for a 3-minute song on Apple silicon.
+  /// isolate: Demucs stems → per-stem loudness, harmonic chroma, the drum
+  /// hits of the drum stem and the All-In-One song structure, with [folds] of
+  /// the [foldCount] folds (fewer is faster and slightly less accurate).
+  /// Reads [demucsModelFile] and the fold files from [modelDir] (default
+  /// [bundledModelDir]), and [drumModelFile] when it is there (without it
+  /// only the drums are missing, see [DspDeepAnalysis.drumError]). About a
+  /// minute of CPU for a 3-minute song on Apple silicon.
   ///
   /// [onProgress] receives `0..1` a few times a second; completing [cancel]
   /// stops the analysis with [DspErrorKind.cancelled].
@@ -337,6 +342,10 @@ final class IciclesDsp {
         stemRows: r.stem_rows,
         chroma: floats(r.chroma, r.chroma_rows * 12),
         chromaRows: r.chroma_rows,
+        drumTimes: floats(r.drum_times, r.drum_count),
+        drumClasses: r.drum_count == 0 ? Uint8List(0) : Uint8List.fromList(r.drum_classes.asTypedList(r.drum_count)),
+        drumStrengths: floats(r.drum_strengths, r.drum_count),
+        drumError: r.drum_error == ffi.nullptr ? null : r.drum_error.cast<Utf8>().toDartString(),
       );
     } finally {
       try {

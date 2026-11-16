@@ -122,7 +122,13 @@ directory.
    the mix's reference.
 3. **Chroma** of bass + other + vocals (no drums), 10 rows a second — for key
    estimation by the caller.
-4. **All-In-One** (`allin1_fold{k}.onnx`, `rust/src/structure.rs`): madmom's
+4. **Drums of the drum stem**: the ADTOF drum detection (below) on the
+   separated drum stem (already 44.1 kHz) → `DspDeepAnalysis.drums` — cleaner
+   than the first pass on the full mix, where loud bass and other instruments
+   trigger extra kicks. The drum model is optional here: read from `modelDir`
+   when present (`IciclesDspWasm.analyzeDeep(drum:)` in the browser), else
+   `drums` is `null` and `drumError` says why; it never fails the deep pass.
+5. **All-In-One** (`allin1_fold{k}.onnx`, `rust/src/structure.rs`): madmom's
    log-filtered spectrogram of each stem (`rust/src/spectrum.rs`, 81 bands,
    equal to madmom within 1e-5), the mean logits of the folds, then
    `allin1.postprocessing.functional` → sections labelled start, end, intro,

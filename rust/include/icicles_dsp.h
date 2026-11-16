@@ -133,22 +133,36 @@ typedef struct IciclesDspDeepResult {
   // second, each row summing to 1 (all zero in silence).
   float *chroma;
   size_t chroma_rows;
+  // Drum hits transcribed on the drum stem, sorted by time (as drum_times ..
+  // drum_count of IciclesDspResult).
+  float *drum_times;
+  uint8_t *drum_classes;
+  float *drum_strengths;
+  size_t drum_count;
+  // Status of the drum detection: ICICLES_DSP_OK when it ran, otherwise the
+  // cause (e.g. no drum model) with the message in drum_error. A failed drum
+  // detection never fails the deep analysis.
+  int32_t drum_status;
+  // NUL-terminated message of a failed drum detection, else NULL.
+  char *drum_error;
 } IciclesDspDeepResult;
 
-// Runs the deep analysis (Demucs stems -> stem loudness, chroma and the
-// All-In-One song structure with `folds` of the 8 folds) of `len` mono samples
-// at `sample_rate`. `model_dir` holds htdemucs_core.onnx and
-// allin1_fold0..7.onnx. `control` may be NULL. Minutes of CPU; returns
-// ICICLES_DSP_CANCELLED when cancelled.
+// Runs the deep analysis (Demucs stems -> stem loudness, chroma, drum hits of
+// the drum stem and the All-In-One song structure with `folds` of the 8 folds)
+// of `len` mono samples at `sample_rate`. `model_dir` holds htdemucs_core.onnx,
+// allin1_fold0..7.onnx and optionally adtof_frame_rnn.onnx (without it only
+// the drum detection fails, see drum_status). `control` may be NULL. Minutes
+// of CPU; returns ICICLES_DSP_CANCELLED when cancelled.
 int32_t icicles_dsp_analyze_deep(const float *samples, size_t len, uint32_t sample_rate, const char *model_dir,
                                  uint32_t folds, IciclesDspControl *control, IciclesDspDeepResult *out);
 
 // Like icicles_dsp_analyze_deep with the models as bytes (the browser): the
-// Demucs network and `fold_count` fold models, all of which run.
+// Demucs network, `fold_count` fold models (all of which run) and the drum
+// model (NULL `drum`: only the drum detection fails, see drum_status).
 int32_t icicles_dsp_analyze_deep_models(const float *samples, size_t len, uint32_t sample_rate,
                                         const uint8_t *demucs, size_t demucs_len, const uint8_t *const *folds,
-                                        const size_t *fold_lens, size_t fold_count, IciclesDspControl *control,
-                                        IciclesDspDeepResult *out);
+                                        const size_t *fold_lens, size_t fold_count, const uint8_t *drum,
+                                        size_t drum_len, IciclesDspControl *control, IciclesDspDeepResult *out);
 
 // Releases the arrays of a deep result and zeroes it.
 void icicles_dsp_free_deep(IciclesDspDeepResult *out);

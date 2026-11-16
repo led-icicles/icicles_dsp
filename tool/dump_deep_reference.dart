@@ -29,6 +29,12 @@ Future<void> main() async {
     ],
     'chromaRows': result.chromaRows,
     'chromaSum': result.chroma.fold<double>(0, (a, b) => a + b),
+    // Drum hits of the drum stem (microseconds per class), with the bundled
+    // drum model.
+    'drums': {
+      for (final cls in DrumClass.values)
+        cls.name: [for (final h in result.drums?.of(cls) ?? const <DrumHit>[]) h.time.inMicroseconds],
+    },
   };
   File('test/fixtures/deep_reference.json').writeAsStringSync(const JsonEncoder.withIndent('  ').convert(json));
   stdout.writeln('Wrote test/fixtures/deep_reference.json (${result.sections.length} sections).');

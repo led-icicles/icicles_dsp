@@ -1,3 +1,17 @@
+## 0.5.0
+
+- Depends on `icicles_generators` 0.10.0.
+
+- Deep analysis: drum hits transcribed (ADTOF) on the separated drum stem — `DeepAnalysis::drums` / `drum_error`
+  (`deep.rs`), `drum_times` … `drum_error` in `IciclesDspDeepResult` (as in `IciclesDspResult`). The drum model is
+  optional: read from the model directory when present; `DeepModels::Bytes` and `icicles_dsp_analyze_deep_models`
+  take it as bytes (new `drum`/`drum_len` parameters before `control`). A missing model or a failed detection only
+  leaves the drums empty.
+- `drums::detect_with` (a loaded model on 44.1 kHz PCM), `drums::load_model` / `load_model_file` /
+  `load_model_bytes`; `DrumError` is `Clone`.
+- Dart: `DspDeepAnalysis.drums` (`DrumHits?`) and `drumError`, in `fromRaw` (optional `drumTimes`/`drumClasses`/
+  `drumStrengths`/`drumError`) and the wire form; `IciclesDspWasm.analyzeDeep(drum:)`.
+
 ## 0.4.0
 
 - Deep analysis: `rust/src/deep.rs` runs Hybrid Transformer Demucs (`rust/src/demucs.rs`, stems drums/bass/other/

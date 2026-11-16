@@ -96,11 +96,12 @@ external void icicles_dsp_dealloc(ffi.Pointer<ffi.Uint8> pointer, int len);
 @ffi.Native<ffi.Void Function(ffi.Pointer<IciclesDspResult>)>()
 external void icicles_dsp_free(ffi.Pointer<IciclesDspResult> out);
 
-/// Runs the deep analysis (Demucs stems -> stem loudness, chroma and the
-/// All-In-One song structure with `folds` of the 8 folds) of `len` mono samples
-/// at `sample_rate`. `model_dir` holds htdemucs_core.onnx and
-/// allin1_fold0..7.onnx. `control` may be NULL. Minutes of CPU; returns
-/// ICICLES_DSP_CANCELLED when cancelled.
+/// Runs the deep analysis (Demucs stems -> stem loudness, chroma, drum hits of
+/// the drum stem and the All-In-One song structure with `folds` of the 8 folds)
+/// of `len` mono samples at `sample_rate`. `model_dir` holds htdemucs_core.onnx,
+/// allin1_fold0..7.onnx and optionally adtof_frame_rnn.onnx (without it only
+/// the drum detection fails, see drum_status). `control` may be NULL. Minutes
+/// of CPU; returns ICICLES_DSP_CANCELLED when cancelled.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Pointer<ffi.Float>,
@@ -123,7 +124,8 @@ external int icicles_dsp_analyze_deep(
 );
 
 /// Like icicles_dsp_analyze_deep with the models as bytes (the browser): the
-/// Demucs network and `fold_count` fold models, all of which run.
+/// Demucs network, `fold_count` fold models (all of which run) and the drum
+/// model (NULL `drum`: only the drum detection fails, see drum_status).
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Pointer<ffi.Float>,
@@ -133,6 +135,8 @@ external int icicles_dsp_analyze_deep(
     ffi.Size,
     ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
     ffi.Pointer<ffi.Size>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
     ffi.Size,
     ffi.Pointer<IciclesDspControl>,
     ffi.Pointer<IciclesDspDeepResult>,
@@ -147,6 +151,8 @@ external int icicles_dsp_analyze_deep_models(
   ffi.Pointer<ffi.Pointer<ffi.Uint8>> folds,
   ffi.Pointer<ffi.Size> fold_lens,
   int fold_count,
+  ffi.Pointer<ffi.Uint8> drum,
+  int drum_len,
   ffi.Pointer<IciclesDspControl> control,
   ffi.Pointer<IciclesDspDeepResult> out,
 );
@@ -287,6 +293,26 @@ final class IciclesDspDeepResult extends ffi.Struct {
 
   @ffi.Size()
   external int chroma_rows;
+
+  /// Drum hits transcribed on the drum stem, sorted by time (as drum_times ..
+  /// drum_count of IciclesDspResult).
+  external ffi.Pointer<ffi.Float> drum_times;
+
+  external ffi.Pointer<ffi.Uint8> drum_classes;
+
+  external ffi.Pointer<ffi.Float> drum_strengths;
+
+  @ffi.Size()
+  external int drum_count;
+
+  /// Status of the drum detection: ICICLES_DSP_OK when it ran, otherwise the
+  /// cause (e.g. no drum model) with the message in drum_error. A failed drum
+  /// detection never fails the deep analysis.
+  @ffi.Int32()
+  external int drum_status;
+
+  /// NUL-terminated message of a failed drum detection, else NULL.
+  external ffi.Pointer<ffi.Char> drum_error;
 }
 
 const int ICICLES_DSP_TRACK_BEATS = 1;

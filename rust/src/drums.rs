@@ -94,7 +94,7 @@ pub struct DrumHit {
 }
 
 /// Why drum detection failed.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum DrumError {
     ModelNotFound(PathBuf),
     ModelLoad(String),
@@ -133,20 +133,41 @@ pub fn detect(
     sample_rate: u32,
     models: ModelSource<'_>,
 ) -> Result<Vec<DrumHit>, DrumError> {
-    let load = |e: anyhow::Error| DrumError::ModelLoad(format!("{e:#}"));
-    let mut model = match models {
-        ModelSource::Dir(dir) => OnnxModel::from_file(&resolve_model(dir)?).map_err(load)?,
-        ModelSource::Bytes {
-            drum: Some(bytes), ..
-        } => OnnxModel::from_bytes(bytes).map_err(load)?,
-        ModelSource::Bytes { drum: None, .. } => {
-            return Err(DrumError::ModelNotFound(PathBuf::from(DRUM_MODEL_FILE)))
-        }
-    };
+    let mut model = load_model(models)?;
     let audio = resample(samples, sample_rate).map_err(DrumError::Analysis)?;
+    detect_with(&mut model, &audio)
+}
+
+/// The drum model of `models`.
+pub fn load_model(models: ModelSource<'_>) -> Result<OnnxModel, DrumError> {
+    match models {
+        ModelSource::Dir(dir) => load_model_file(dir),
+        ModelSource::Bytes { drum, .. } => load_model_bytes(drum),
+    }
+}
+
+/// The drum model ([`DRUM_MODEL_FILE`]) in `model_dir`.
+pub fn load_model_file(model_dir: &Path) -> Result<OnnxModel, DrumError> {
+    OnnxModel::from_file(&resolve_model(model_dir)?)
+        .map_err(|e| DrumError::ModelLoad(format!("{e:#}")))
+}
+
+/// The drum model from its file's bytes; `None` is a missing model.
+pub fn load_model_bytes(bytes: Option<&[u8]>) -> Result<OnnxModel, DrumError> {
+    match bytes {
+        Some(bytes) => {
+            OnnxModel::from_bytes(bytes).map_err(|e| DrumError::ModelLoad(format!("{e:#}")))
+        }
+        None => Err(DrumError::ModelNotFound(PathBuf::from(DRUM_MODEL_FILE))),
+    }
+}
+
+/// Detects the drum hits of mono PCM already at [`SAMPLE_RATE`] (e.g. a
+/// separated drum stem) with a loaded drum model. Hits are sorted by time.
+pub fn detect_with<M: Model>(model: &mut M, audio: &[f32]) -> Result<Vec<DrumHit>, DrumError> {
     let front = FrontEnd::new();
-    let (spec, linear) = front.spectrogram(&audio);
-    let activations = activations(&mut model, &spec, front.bands())
+    let (spec, linear) = front.spectrogram(audio);
+    let activations = activations(model, &spec, front.bands())
         .map_err(|e| DrumError::Analysis(format!("{e:#}")))?;
     Ok(hits(&activations, &linear, &front))
 }

@@ -13,7 +13,7 @@ use std::ptr;
 
 use crate::beats::{self, BeatError};
 use crate::deep::{self, Control, DeepError, DeepModels};
-use crate::drums::{self, DrumError};
+use crate::drums::{self, DrumError, DrumHit};
 use crate::features::{self, FeatureError, COLUMN_COUNT, HOP_MICROS};
 use crate::model::ModelSource;
 
@@ -356,28 +356,13 @@ fn analyze(
         })?,
         None => beats::Beats::default(),
     };
-    let (drum_hits, drum_status, drum_error) = match models
-        .filter(|_| flags & ICICLES_DSP_DETECT_DRUMS != 0)
-    {
-        None => (Vec::new(), IciclesDspStatus::Ok, ptr::null_mut()),
+    let drums = match models.filter(|_| flags & ICICLES_DSP_DETECT_DRUMS != 0) {
+        None => DrumArrays::new(Vec::new(), None),
         Some(models) => match drums::detect(signal, sample_rate, models) {
-            Ok(hits) => (hits, IciclesDspStatus::Ok, ptr::null_mut()),
-            Err(e) => {
-                let status = match e {
-                    DrumError::ModelNotFound(_) => IciclesDspStatus::ModelNotFound,
-                    DrumError::ModelLoad(_) => IciclesDspStatus::ModelLoadFailed,
-                    DrumError::Analysis(_) => IciclesDspStatus::AnalysisFailed,
-                };
-                let message = CString::new(e.to_string())
-                    .unwrap_or_else(|_| CString::new("drum detection failed").expect("literal"));
-                (Vec::new(), status, message.into_raw())
-            }
+            Ok(hits) => DrumArrays::new(hits, None),
+            Err(e) => DrumArrays::new(Vec::new(), Some(&e)),
         },
     };
-    let drum_count = drum_hits.len();
-    let (drum_times, _) = give_away(drum_hits.iter().map(|h| h.time).collect());
-    let (drum_classes, _) = give_away(drum_hits.iter().map(|h| h.class as u8).collect());
-    let (drum_strengths, _) = give_away(drum_hits.iter().map(|h| h.strength).collect());
     let (beat_ptr, beat_count) = give_away(beats.beats);
     let (downbeat_ptr, downbeat_count) = give_away(beats.downbeats);
     let (feature_ptr, _) = give_away(features.data);
@@ -390,13 +375,75 @@ fn analyze(
         feature_rows: features.rows,
         feature_columns: COLUMN_COUNT,
         feature_hop_micros: HOP_MICROS,
-        drum_times,
-        drum_classes,
-        drum_strengths,
-        drum_count,
-        drum_status: drum_status as i32,
-        drum_error,
+        drum_times: drums.times,
+        drum_classes: drums.classes,
+        drum_strengths: drums.strengths,
+        drum_count: drums.count,
+        drum_status: drums.status,
+        drum_error: drums.error,
     })
+}
+
+/// Drum hits as the C arrays of a result (see `IciclesDspResult::drum_times`).
+struct DrumArrays {
+    times: *mut f32,
+    classes: *mut u8,
+    strengths: *mut f32,
+    count: usize,
+    status: i32,
+    error: *mut c_char,
+}
+
+impl DrumArrays {
+    /// The arrays of `hits`; with `error` the status and message of a failed
+    /// detection.
+    fn new(hits: Vec<DrumHit>, error: Option<&DrumError>) -> Self {
+        let (status, error) = match error {
+            None => (IciclesDspStatus::Ok, ptr::null_mut()),
+            Some(e) => {
+                let status = match e {
+                    DrumError::ModelNotFound(_) => IciclesDspStatus::ModelNotFound,
+                    DrumError::ModelLoad(_) => IciclesDspStatus::ModelLoadFailed,
+                    DrumError::Analysis(_) => IciclesDspStatus::AnalysisFailed,
+                };
+                let message = CString::new(e.to_string())
+                    .unwrap_or_else(|_| CString::new("drum detection failed").expect("literal"));
+                (status, message.into_raw())
+            }
+        };
+        let count = hits.len();
+        let (times, _) = give_away(hits.iter().map(|h| h.time).collect());
+        let (classes, _) = give_away(hits.iter().map(|h| h.class as u8).collect());
+        let (strengths, _) = give_away(hits.iter().map(|h| h.strength).collect());
+        DrumArrays {
+            times,
+            classes,
+            strengths,
+            count,
+            status: status as i32,
+            error,
+        }
+    }
+
+    /// Releases arrays made by [`DrumArrays::new`].
+    ///
+    /// # Safety
+    /// The pointers must come from `DrumArrays::new` (via a result) and not
+    /// have been freed.
+    unsafe fn free(
+        times: *mut f32,
+        classes: *mut u8,
+        strengths: *mut f32,
+        count: usize,
+        error: *mut c_char,
+    ) {
+        take_back(times, count);
+        take_back(classes, count);
+        take_back(strengths, count);
+        if !error.is_null() {
+            drop(CString::from_raw(error));
+        }
+    }
 }
 
 /// Releases the arrays of a result filled by [`icicles_dsp_analyze`] and
@@ -417,12 +464,13 @@ pub unsafe extern "C" fn icicles_dsp_free(out: *mut IciclesDspResult) {
             result.features,
             result.feature_rows * result.feature_columns,
         );
-        take_back(result.drum_times, result.drum_count);
-        take_back(result.drum_classes, result.drum_count);
-        take_back(result.drum_strengths, result.drum_count);
-        if !result.drum_error.is_null() {
-            drop(CString::from_raw(result.drum_error));
-        }
+        DrumArrays::free(
+            result.drum_times,
+            result.drum_classes,
+            result.drum_strengths,
+            result.drum_count,
+            result.drum_error,
+        );
         ptr::write(out, IciclesDspResult::EMPTY);
     }));
 }
@@ -447,6 +495,18 @@ pub struct IciclesDspDeepResult {
     /// 10 rows a second; each row sums to 1 (all zero in silence).
     pub chroma: *mut f32,
     pub chroma_rows: usize,
+    /// Drum hits transcribed on the drum stem, sorted by time (as
+    /// [`IciclesDspResult::drum_times`] … `drum_count`).
+    pub drum_times: *mut f32,
+    pub drum_classes: *mut u8,
+    pub drum_strengths: *mut f32,
+    pub drum_count: usize,
+    /// Status of the drum detection: [`IciclesDspStatus::Ok`] when it ran;
+    /// otherwise the cause (e.g. no drum model), with the message in
+    /// `drum_error`. A failed drum detection never fails the deep analysis.
+    pub drum_status: i32,
+    /// NUL-terminated message of a failed drum detection, else NULL.
+    pub drum_error: *mut c_char,
 }
 
 impl IciclesDspDeepResult {
@@ -459,13 +519,21 @@ impl IciclesDspDeepResult {
         stem_rows: 0,
         chroma: ptr::null_mut(),
         chroma_rows: 0,
+        drum_times: ptr::null_mut(),
+        drum_classes: ptr::null_mut(),
+        drum_strengths: ptr::null_mut(),
+        drum_count: 0,
+        drum_status: 0,
+        drum_error: ptr::null_mut(),
     };
 }
 
 /// Runs the deep analysis (Demucs stems, stem loudness, chroma, All-In-One
 /// structure with `folds` of the 8 folds) of `len` mono samples at
-/// `sample_rate`. `model_dir` holds `htdemucs_core.onnx` and
-/// `allin1_fold{0..folds}.onnx`. `control` (may be NULL) receives the
+/// `sample_rate`, with the drum hits of the drum stem. `model_dir` holds
+/// `htdemucs_core.onnx` and `allin1_fold{0..folds}.onnx`, and optionally the
+/// drum model `adtof_frame_rnn.onnx` (without it `drum_status` reports
+/// [`IciclesDspStatus::ModelNotFound`]; the analysis still succeeds). `control` (may be NULL) receives the
 /// progress as f32 bits `0..1` and is polled for a non-zero cancel flag;
 /// cancelling returns [`IciclesDspStatus::Cancelled`].
 ///
@@ -516,13 +584,14 @@ pub unsafe extern "C" fn icicles_dsp_analyze_deep(
 }
 
 /// Like [`icicles_dsp_analyze_deep`] with the models as bytes (the browser):
-/// the Demucs network and `fold_count` fold models (`folds[i]` of
-/// `fold_lens[i]` bytes); all of them run.
+/// the Demucs network, `fold_count` fold models (`folds[i]` of
+/// `fold_lens[i]` bytes; all of them run) and the drum model (`drum`, NULL
+/// when not provided: only the drum detection fails, in the result).
 ///
 /// # Safety
 /// As [`icicles_dsp_analyze_deep`]; `demucs` must point to `demucs_len`
 /// bytes, `folds`/`fold_lens` to `fold_count` entries each pointing to its
-/// length of bytes.
+/// length of bytes, `drum` be NULL or point to `drum_len` bytes.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn icicles_dsp_analyze_deep_models(
@@ -534,6 +603,8 @@ pub unsafe extern "C" fn icicles_dsp_analyze_deep_models(
     folds: *const *const u8,
     fold_lens: *const usize,
     fold_count: usize,
+    drum: *const u8,
+    drum_len: usize,
     control: *const Control,
     out: *mut IciclesDspDeepResult,
 ) -> i32 {
@@ -562,6 +633,8 @@ pub unsafe extern "C" fn icicles_dsp_analyze_deep_models(
             let models = DeepModels::Bytes {
                 demucs: std::slice::from_raw_parts(demucs, demucs_len),
                 folds: fold_bytes,
+                drum: (!drum.is_null() && drum_len > 0)
+                    .then(|| std::slice::from_raw_parts(drum, drum_len)),
             };
             run_deep(signal, sample_rate, &models, fold_count as u32, control)
         })),
@@ -598,6 +671,7 @@ unsafe fn run_deep(
     let (section_labels, _) = give_away(analysis.segments.iter().map(|s| s.label).collect());
     let (stem_levels, _) = give_away(analysis.stem_levels);
     let (chroma, _) = give_away(analysis.chroma);
+    let drums = DrumArrays::new(analysis.drums, analysis.drum_error.as_ref());
     Ok(IciclesDspDeepResult {
         section_starts,
         section_ends,
@@ -607,6 +681,12 @@ unsafe fn run_deep(
         stem_rows: analysis.stem_rows,
         chroma,
         chroma_rows: analysis.chroma_rows,
+        drum_times: drums.times,
+        drum_classes: drums.classes,
+        drum_strengths: drums.strengths,
+        drum_count: drums.count,
+        drum_status: drums.status,
+        drum_error: drums.error,
     })
 }
 
@@ -651,6 +731,13 @@ pub unsafe extern "C" fn icicles_dsp_free_deep(out: *mut IciclesDspDeepResult) {
         take_back(result.section_labels, result.section_count);
         take_back(result.stem_levels, result.stem_rows * 4);
         take_back(result.chroma, result.chroma_rows * 12);
+        DrumArrays::free(
+            result.drum_times,
+            result.drum_classes,
+            result.drum_strengths,
+            result.drum_count,
+            result.drum_error,
+        );
         ptr::write(out, IciclesDspDeepResult::EMPTY);
     }));
 }
@@ -864,5 +951,94 @@ mod tests {
         assert!(last_error().contains("htdemucs_core.onnx"));
         unsafe { icicles_dsp_free_deep(&mut out) };
         assert_eq!(icicles_dsp_control_size(), 8);
+    }
+
+    #[test]
+    fn deep_result_carries_the_drums_of_the_drum_stem() {
+        let models = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../models"));
+        let needed = [deep::DEMUCS_MODEL_FILE, "allin1_fold0.onnx"];
+        if !needed.iter().all(|f| models.join(f).is_file()) {
+            eprintln!("skipped: deep models missing (tool/download-deep-models.sh)");
+            return;
+        }
+        // Kicks every 0.5 s from 0.25 s over a quiet tone, fading out.
+        let sr = 44_100usize;
+        let signal: Vec<f32> = (0..sr * 4)
+            .map(|i| {
+                let t = i as f64 / sr as f64;
+                let fade = ((4.0 - t) / 0.4).clamp(0.0, 1.0);
+                let tone = 0.1 * fade * (2.0 * std::f64::consts::PI * 220.0 * t).sin();
+                let k = t - 0.25;
+                let kick = if k < 0.0 || k >= 3.5 {
+                    0.0
+                } else {
+                    let dt = k % 0.5;
+                    0.9 * (-dt / 0.12).exp()
+                        * (2.0
+                            * std::f64::consts::PI
+                            * (55.0 * dt + 3.0 * (1.0 - (-30.0 * dt).exp())))
+                        .sin()
+                };
+                (tone + 0.8 * kick) as f32
+            })
+            .collect();
+        let dir = CString::new(models.to_str().unwrap()).unwrap();
+        let mut out = IciclesDspDeepResult::EMPTY;
+        let status = unsafe {
+            icicles_dsp_analyze_deep(
+                signal.as_ptr(),
+                signal.len(),
+                44_100,
+                dir.as_ptr(),
+                1,
+                ptr::null(),
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::Ok as i32, "{}", last_error());
+        if models.join(drums::DRUM_MODEL_FILE).is_file() {
+            assert_eq!(out.drum_status, IciclesDspStatus::Ok as i32);
+            assert!(out.drum_error.is_null());
+            let classes = unsafe { std::slice::from_raw_parts(out.drum_classes, out.drum_count) };
+            assert_eq!(
+                classes.iter().filter(|c| **c == 0).count(),
+                7,
+                "{classes:?}"
+            );
+        }
+        unsafe { icicles_dsp_free_deep(&mut out) };
+        assert!(out.drum_times.is_null());
+
+        // No drum model as bytes: the deep analysis succeeds without drums.
+        let demucs = std::fs::read(models.join(deep::DEMUCS_MODEL_FILE)).unwrap();
+        let fold = std::fs::read(models.join("allin1_fold0.onnx")).unwrap();
+        let folds = [fold.as_ptr()];
+        let fold_lens = [fold.len()];
+        let status = unsafe {
+            icicles_dsp_analyze_deep_models(
+                signal.as_ptr(),
+                signal.len(),
+                44_100,
+                demucs.as_ptr(),
+                demucs.len(),
+                folds.as_ptr(),
+                fold_lens.as_ptr(),
+                1,
+                ptr::null(),
+                0,
+                ptr::null(),
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::Ok as i32, "{}", last_error());
+        assert!(out.stem_rows > 0);
+        assert_eq!(out.drum_count, 0);
+        assert_eq!(out.drum_status, IciclesDspStatus::ModelNotFound as i32);
+        let message = unsafe { CStr::from_ptr(out.drum_error) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(message.contains(drums::DRUM_MODEL_FILE), "{message}");
+        unsafe { icicles_dsp_free_deep(&mut out) };
+        assert!(out.drum_error.is_null());
     }
 }

@@ -4,6 +4,7 @@ import 'package:icicles_generators/icicles_generators.dart';
 
 import 'dsp_analysis.dart';
 import 'dsp_exception.dart';
+import 'drum_hits_raw.dart';
 
 /// The raw arrays of one analysis, as the Rust library returns them (the
 /// `IciclesDspResult` struct): times in seconds, the row-major feature
@@ -57,26 +58,12 @@ final class DspResultData {
       beats: _durations(beats),
       downbeats: _durations(downbeats),
       features: AudioFeatures(features, hopDuration: Duration(microseconds: featureHopMicros)),
-      drums: _drums(),
+      drums: drumHitsFromRaw(drumTimes, drumClasses, drumStrengths),
       drumError: drumError,
     );
   }
 
-  DrumHits? _drums() {
-    final count = drumTimes.length;
-    if (count == 0) return null;
-    final hits = <DrumClass, List<DrumHit>>{};
-    for (var i = 0; i < count; i++) {
-      if (drumClasses[i] >= DrumClass.values.length) continue;
-      (hits[DrumClass.values[drumClasses[i]]] ??= []).add(DrumHit(_duration(drumTimes[i]), drumStrengths[i]));
-    }
-    return DrumHits(hits, source: DrumHits.sourceAdtof);
-  }
-
-  static List<Duration> _durations(Float32List seconds) => [for (final s in seconds) _duration(s)];
-
-  static Duration _duration(double seconds) =>
-      Duration(microseconds: (seconds * Duration.microsecondsPerSecond).round());
+  static List<Duration> _durations(Float32List seconds) => [for (final s in seconds) durationOfSeconds(s)];
 }
 
 /// The [DspErrorKind] of a library status code (`IciclesDspStatus`).

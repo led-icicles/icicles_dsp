@@ -1,5 +1,5 @@
-//! The deep analysis: Demucs stems → per-stem loudness, harmonic chroma and
-//! the All-In-One song structure. Minutes of CPU per song, so it is a
+//! The deep analysis: Demucs stems → per-stem loudness, harmonic chroma,
+//! drum hits transcribed on the drum stem and the All-In-One song structure. Minutes of CPU per song, so it is a
 //! separate pass from [`crate::ffi::icicles_dsp_analyze`], with progress and
 //! cancellation through [`Control`].
 
@@ -10,7 +10,7 @@ use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 
 use crate::demucs::{self, Stem, STEM_COUNT};
-use crate::drums;
+use crate::drums::{self, DrumError, DrumHit};
 use crate::model::OnnxModel;
 use crate::structure::{self, Segment};
 
@@ -24,18 +24,26 @@ pub fn fold_model_file(k: usize) -> String {
     format!("allin1_fold{k}.onnx")
 }
 
+// The drum stem goes to the drum model without resampling.
+const _: () = assert!(demucs::SAMPLE_RATE == drums::SAMPLE_RATE);
+
 /// Chroma rows per second.
 pub const CHROMA_FPS: usize = 10;
 
-/// Where the deep models come from.
+/// Where the deep models come from. The drum model
+/// ([`drums::DRUM_MODEL_FILE`]) is optional: without it the drums stay empty
+/// and [`DeepAnalysis::drum_error`] says why.
 #[derive(Debug, Clone)]
 pub enum DeepModels<'a> {
-    /// A directory with [`DEMUCS_MODEL_FILE`] and the fold files.
+    /// A directory with [`DEMUCS_MODEL_FILE`], the fold files and, when
+    /// present, the drum model.
     Dir(&'a Path),
-    /// The files' bytes (browser): Demucs and one entry per fold to run.
+    /// The files' bytes (browser): Demucs, one entry per fold to run and the
+    /// drum model (`None` when not provided).
     Bytes {
         demucs: &'a [u8],
         folds: Vec<&'a [u8]>,
+        drum: Option<&'a [u8]>,
     },
 }
 
@@ -71,6 +79,12 @@ pub struct DeepAnalysis {
     /// silence) of the harmonic stems, [`CHROMA_FPS`] rows a second.
     pub chroma: Vec<f32>,
     pub chroma_rows: usize,
+    /// Drum hits transcribed (ADTOF) on the separated drum stem, sorted by
+    /// time — cleaner than on the full mix, where loud bass and other
+    /// instruments trigger false kicks. Empty when the drum detection failed.
+    pub drums: Vec<DrumHit>,
+    /// Why the drum detection failed (it never fails the deep analysis).
+    pub drum_error: Option<DrumError>,
 }
 
 /// Why the deep analysis failed.
@@ -95,7 +109,8 @@ impl std::fmt::Display for DeepError {
 
 impl std::error::Error for DeepError {}
 
-/// Share of the progress bar spent separating (the rest: structure).
+/// Share of the progress bar spent separating (the rest: drums on the drum
+/// stem, then structure).
 const SEPARATION_SHARE: f32 = 0.55;
 
 /// Runs the deep analysis of mono PCM (`-1..1`) at `sample_rate`, with up to
@@ -132,6 +147,7 @@ pub fn analyze(
         DeepModels::Bytes {
             demucs,
             folds: bytes,
+            ..
         } => {
             fold_paths = Vec::new();
             if bytes.is_empty() {
@@ -152,6 +168,14 @@ pub fn analyze(
     let rows = (samples.len() * 100).div_ceil(sample_rate as usize);
     let stem_levels = stem_levels(&mix, &stems, rows);
     let (chroma, chroma_rows) = chroma(&stems);
+    if control.cancelled() {
+        return Err(DeepError::Cancelled);
+    }
+    // The stems are at 44.1 kHz already: no resampling.
+    let (drums, drum_error) = match drum_hits(models, stems.get(Stem::Drums)) {
+        Ok(hits) => (hits, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
 
     let (features, frames) = structure::features(
         stems.get(Stem::Bass),
@@ -190,7 +214,18 @@ pub fn analyze(
         stem_rows: rows,
         chroma,
         chroma_rows,
+        drums,
+        drum_error,
     })
+}
+
+/// The drum hits of the drum stem (44.1 kHz) with the drum model of `models`.
+fn drum_hits(models: &DeepModels<'_>, stem: &[f32]) -> Result<Vec<DrumHit>, DrumError> {
+    let mut model = match models {
+        DeepModels::Dir(dir) => drums::load_model_file(dir)?,
+        DeepModels::Bytes { drum, .. } => drums::load_model_bytes(*drum)?,
+    };
+    drums::detect_with(&mut model, stem)
 }
 
 const LEVEL_WINDOW: usize = 2048;
