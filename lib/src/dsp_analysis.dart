@@ -1,8 +1,10 @@
 import 'package:icicles_generators/icicles_generators.dart';
 
+import 'dsp_chords.dart';
+
 /// The result of [IciclesDsp.analyze]: the Beat This! beats and downbeats,
-/// the ADTOF drum hits and the `icicles_generators` feature matrix of one
-/// signal.
+/// the ADTOF drum hits, the BTC chords and the `icicles_generators` feature
+/// matrix of one signal.
 final class DspAnalysis {
   /// Beat instants from the start of the signal, sorted.
   final List<Duration> beats;
@@ -20,15 +22,26 @@ final class DspAnalysis {
   /// `null`.
   final String? drumError;
 
+  /// The recognized chords, sorted by time and never overlapping (empty when
+  /// not requested or failed); stretches without a chord are gaps.
+  final List<DspChord> chords;
+
+  /// Why the chord recognition failed (it never fails the analysis), else
+  /// `null`.
+  final String? chordError;
+
   DspAnalysis({
     required List<Duration> beats,
     required List<Duration> downbeats,
     required this.features,
     DrumHits? drums,
     this.drumError,
+    List<DspChord> chords = const [],
+    this.chordError,
   }) : beats = List.unmodifiable(beats),
        downbeats = List.unmodifiable(downbeats),
-       drums = drums ?? DrumHits.empty;
+       drums = drums ?? DrumHits.empty,
+       chords = List.unmodifiable(chords);
 
   /// The mean beat period (the span from the first to the last beat over the
   /// number of intervals), or `null` with fewer than two beats.

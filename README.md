@@ -11,6 +11,9 @@ mono PCM signal into
   from the [ADTOF](https://github.com/MZehren/ADTOF) Frame_RNN drum
   transcription model (Zehren et al.), exported to ONNX and run on the same
   `rten` runtime;
+- **chords** — root and quality (major, minor, sevenths, sus…) with start and
+  end — from the BTC model as retrained by
+  [ChordMini](https://github.com/ptnghia-j/ChordMini), on the same runtime;
 - the **`AudioFeatures` matrix** of `icicles_generators` (22 columns every
   10 ms: level, bass, mid, treble, onset, peak frequency, 16 mel bands), a Rust
   port of the Dart `AudioFeatureExtractor` with the same arithmetic — the output
@@ -62,13 +65,16 @@ analysis.downbeats; // List<Duration>, a subset of beats
 analysis.features;  // AudioFeatures (icicles_generators)
 analysis.drums;     // DrumHits (icicles_generators), DrumHits.empty when not detected
 analysis.drumError; // why the drum detection failed (it never fails the analysis), else null
+analysis.chords;    // List<DspChord> (start, end, root 0..11, quality), empty when not recognized
+analysis.chordError; // why the chord recognition failed (it never fails the analysis), else null
 analysis.bpm;       // mean tempo, null below two beats
 ```
 
 `analyze` runs on a background isolate (`Isolate.run`) and never blocks the
 caller; `IciclesDsp.analyzeSync` is the blocking call behind it.
-`trackBeats: false` / `detectDrums: false` skip the beat / drum models; with
-both off only the features are computed (no models needed).
+`trackBeats: false` / `detectDrums: false` / `detectChords: false` skip the
+beat / drum / chord models; with all off only the features are computed (no
+models needed).
 Failures are `DspException { kind: DspErrorKind, message }`
 (`libraryUnavailable`, `invalidArgument`, `modelNotFound`, `modelLoadFailed`,
 `analysisFailed`, `nativePanic`). `IciclesDsp.isAvailable` tells whether the
@@ -93,6 +99,7 @@ cd example && dart run bin/analyze.dart song.wav [model-dir]
 | `beat_this_small.onnx` | ~10 MB | small beat model, bundled |
 | `beat_this.onnx` | ~83 MB | full-accuracy model, **not bundled** |
 | `adtof_frame_rnn.onnx` | ~1.8 MB | ADTOF drum model (CC BY-NC-SA 4.0), bundled |
+| `btc_chords.onnx` | ~13 MB | ChordMini BTC chord model (MIT), bundled |
 
 The library reads them from the `modelDir` passed to `analyze`: it needs
 `mel_spectrogram.onnx` and uses `beat_this.onnx` when present, else
@@ -103,8 +110,8 @@ the same download itself into its support directory. The default
 `models/` through the package config and works for `dart run`/`dart test`/
 `flutter test`; a compiled Flutter app has no package directory, so it ships
 the two files as assets, copies them to a writable directory once and passes
-that path. The drum model `adtof_frame_rnn.onnx` is read from the same
-directory.
+that path. The drum model `adtof_frame_rnn.onnx` and the chord model
+`btc_chords.onnx` are read from the same directory.
 
 ### Deep analysis (stems and song structure)
 
@@ -137,6 +144,33 @@ directory.
 Progress and cancellation go through an `IciclesDspControl` block shared with
 the analysing thread (FFI only; the browser call blocks its worker).
 `tool/download-deep-models.sh` fetches the models (see `models/NOTICE.md`).
+
+### Chord recognition
+
+`rust/src/chords.rs` reproduces ChordMini's front end — `librosa.cqt` 0.10.1
+over the whole song at 22.05 kHz: 144 bins, 24 per octave from C1, a column
+every 2048 samples (~93 ms), then `ln(|x| + 1e-6)` normalized with the
+checkpoint's mean and deviation. The transform is librosa's recursive one
+(the top octave from a 512-point STFT projected onto 24 sparsified wavelets,
+the signal halved in rate for each octave below); only the halving filter is
+this crate's own (a Kaiser-windowed half-band sinc instead of soxr), which
+moves loud bins by about a hundredth in the log domain. The network (a
+bi-directional transformer, 2.9 M parameters) runs on windows of 108 columns
+(10 s) every 54; the logits of the windows over a column are averaged,
+smoothed with a Gaussian of 9 columns, and the best of the 170 classes
+(12 roots × 14 qualities, unknown, none) taken per column. Runs of equal
+labels become chords; a run shorter than six columns (~0.56 s) joins the chord
+before it; stretches without a chord are gaps.
+
+The ONNX file is produced by `uv run tool/export_chords/export_chords.py` from
+ChordMini's `btc_model_best.pth` (pinned by commit and SHA-256); the script
+checks onnxruntime against PyTorch and writes the parity fixture
+`rust/tests/fixtures/chords/` (a synthetic progression, its librosa log-CQT
+and the reference labels), which `rust/tests/chords.rs` holds the front end
+and rten to. On real songs the frame labels equal the librosa/PyTorch
+reference (`rust/examples/chord_labels.rs` prints them for such a check).
+ChordMini reports about 83 % root and 80 % major/minor accuracy for this
+model on its test split; expect less on music far from pop and rock.
 
 ### Drum detection
 
@@ -201,7 +235,8 @@ model); the beat model runs on 30 s chunks, so short signals are fine.
 
 - `const char *icicles_dsp_version(void)` — static string.
 - `int32_t icicles_dsp_analyze(const float *samples, size_t len, uint32_t sample_rate, const char *model_dir, uint32_t flags, IciclesDspResult *out)`
-  — `flags`: `ICICLES_DSP_TRACK_BEATS` (1), `ICICLES_DSP_DETECT_DRUMS` (2);
+  — `flags`: `ICICLES_DSP_TRACK_BEATS` (1), `ICICLES_DSP_DETECT_DRUMS` (2),
+  `ICICLES_DSP_DETECT_CHORDS` (4);
   `model_dir` NULL = features only. Returns `IciclesDspStatus`
   (0 ok, 1 invalid argument, 2 model not found, 3 model load failed,
   4 analysis failed, 5 panic caught). `out` holds `beats`/`beat_count`,
@@ -210,10 +245,12 @@ model); the beat model runs on 30 s chunks, so short signals are fine.
   `feature_hop_micros` (10 000) and the drum hits `drum_times` (seconds) /
   `drum_classes` (0 kick … 4 cymbals) / `drum_strengths` / `drum_count`; a
   failed drum detection does not fail the call — it sets `drum_status` and
-  `drum_error`.
+  `drum_error`. Likewise the chords: `chord_starts` / `chord_ends` (seconds) /
+  `chord_roots` (C = 0) / `chord_qualities` (0 min, 1 maj … 13 sus4) /
+  `chord_count`, `chord_status` and `chord_error`.
 - `const char *icicles_dsp_last_error(void)` — message of the last failure on
   the calling thread.
-- `int32_t icicles_dsp_analyze_models(samples, len, sample_rate, mel, mel_len, beat, beat_len, drum, drum_len, flags, out)`
+- `int32_t icicles_dsp_analyze_models(samples, len, sample_rate, mel, mel_len, beat, beat_len, drum, drum_len, chord, chord_len, flags, out)`
   — the same with the models as bytes (the browser build); NULL `mel`/`beat` =
   features only, NULL `drum` fails only the drum detection.
 - `uint8_t *icicles_dsp_alloc(size_t len)` / `void icicles_dsp_dealloc(uint8_t *, size_t len)`

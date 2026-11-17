@@ -34,6 +34,9 @@ final class IciclesDsp {
   /// File name of the bundled drum model (ADTOF Frame_RNN, about 2 MB).
   static const drumModelFile = 'adtof_frame_rnn.onnx';
 
+  /// File name of the bundled chord model (ChordMini BTC, about 13 MB).
+  static const chordModelFile = 'btc_chords.onnx';
+
   /// File name of the Demucs network of the deep analysis.
   static const demucsModelFile = 'htdemucs_core.onnx';
 
@@ -120,12 +123,14 @@ final class IciclesDsp {
   ///
   /// With [trackBeats] the Beat This! models are read from [modelDir]
   /// ([melModelFile] plus [fullModelFile] or [smallModelFile]), with
-  /// [detectDrums] the drum model ([drumModelFile]); a `null` [modelDir]
-  /// falls back to [bundledModelDir] and fails with
-  /// [DspErrorKind.modelNotFound] when that is unavailable. Without either
-  /// only the features are computed (no models needed). A failed drum
-  /// detection does not fail the analysis: it leaves [DspAnalysis.drums]
-  /// empty and explains itself in [DspAnalysis.drumError].
+  /// [detectDrums] the drum model ([drumModelFile]), with [detectChords] the
+  /// chord model ([chordModelFile]); a `null` [modelDir] falls back to
+  /// [bundledModelDir] and fails with [DspErrorKind.modelNotFound] when that
+  /// is unavailable. Without any of them only the features are computed (no
+  /// models needed). A failed drum detection or chord recognition does not
+  /// fail the analysis: it leaves [DspAnalysis.drums] / [DspAnalysis.chords]
+  /// empty and explains itself in [DspAnalysis.drumError] /
+  /// [DspAnalysis.chordError].
   ///
   /// Throws [DspException].
   Future<DspAnalysis> analyze(
@@ -134,13 +139,14 @@ final class IciclesDsp {
     String? modelDir,
     bool trackBeats = true,
     bool detectDrums = true,
+    bool detectChords = true,
   }) async {
     if (mono.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
     if (sampleRate < 1000) {
       throw DspException(DspErrorKind.invalidArgument, 'Sample rate $sampleRate Hz is below the 1000 Hz minimum.');
     }
     String? models;
-    if (trackBeats || detectDrums) {
+    if (trackBeats || detectDrums || detectChords) {
       models = modelDir ?? await bundledModelDir();
       if (models == null) {
         throw const DspException(
@@ -157,21 +163,23 @@ final class IciclesDsp {
         modelDir: models,
         trackBeats: trackBeats,
         detectDrums: detectDrums,
+        detectChords: detectChords,
       ),
     );
   }
 
   /// The synchronous native call behind [analyze]; blocks the calling isolate
-  /// for the whole analysis. A `null` [modelDir] skips beat tracking and drum
-  /// detection.
+  /// for the whole analysis. A `null` [modelDir] skips beat tracking, drum
+  /// detection and chord recognition.
   static DspAnalysis analyzeSync(
     Float32List mono,
     int sampleRate, {
     String? modelDir,
     bool trackBeats = true,
     bool detectDrums = true,
+    bool detectChords = true,
   }) {
-    final flags = dspFlags(trackBeats: trackBeats, detectDrums: detectDrums);
+    final flags = dspFlags(trackBeats: trackBeats, detectDrums: detectDrums, detectChords: detectChords);
     final samples = calloc<ffi.Float>(mono.length);
     final out = calloc<bindings.IciclesDspResult>();
     final path = modelDir?.toNativeUtf8() ?? ffi.nullptr;
@@ -190,6 +198,8 @@ final class IciclesDsp {
       final result = out.ref;
       Float32List floats(ffi.Pointer<ffi.Float> pointer, int count) =>
           count == 0 ? Float32List(0) : Float32List.fromList(pointer.asTypedList(count));
+      Uint8List bytes(ffi.Pointer<ffi.Uint8> pointer, int count) =>
+          count == 0 ? Uint8List(0) : Uint8List.fromList(pointer.asTypedList(count));
       return DspResultData(
         beats: floats(result.beats, result.beat_count),
         downbeats: floats(result.downbeats, result.downbeat_count),
@@ -198,11 +208,14 @@ final class IciclesDsp {
         featureColumns: result.feature_columns,
         featureHopMicros: result.feature_hop_micros,
         drumTimes: floats(result.drum_times, result.drum_count),
-        drumClasses: result.drum_count == 0
-            ? Uint8List(0)
-            : Uint8List.fromList(result.drum_classes.asTypedList(result.drum_count)),
+        drumClasses: bytes(result.drum_classes, result.drum_count),
         drumStrengths: floats(result.drum_strengths, result.drum_count),
         drumError: result.drum_error == ffi.nullptr ? null : result.drum_error.cast<Utf8>().toDartString(),
+        chordStarts: floats(result.chord_starts, result.chord_count),
+        chordEnds: floats(result.chord_ends, result.chord_count),
+        chordRoots: bytes(result.chord_roots, result.chord_count),
+        chordQualities: bytes(result.chord_qualities, result.chord_count),
+        chordError: result.chord_error == ffi.nullptr ? null : result.chord_error.cast<Utf8>().toDartString(),
       ).toAnalysis();
     } finally {
       try {

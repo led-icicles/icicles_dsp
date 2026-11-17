@@ -67,6 +67,26 @@ License](https://creativecommons.org/licenses/by-nc-sa/4.0/) (CC BY-NC-SA 4.0):
 non-commercial use only, with attribution, and adaptations under the same
 license. The rest of this package stays MIT.
 
+## Chord model
+
+`btc_chords.onnx` (~13 MB) is the BTC chord recognition model
+(J. Park, K. Choi, S. Jeon, D. Kim, J. Park, "A Bi-Directional Transformer for
+Musical Chord Recognition", ISMIR 2019) as retrained by
+[ChordMini](https://github.com/ptnghia-j/ChordMini) with pseudo-labels and
+continual learning — exported to ONNX by `tool/export_chords/export_chords.py`
+from `checkpoints/btc_model_best.pth` (commit
+`aa6e3a8d7b017f082fd2aaff9329d5c26af49c03`, SHA-256
+`e0a12ca6d881f81e01dfb459b4836ec7dac8d8f87b0170a412b5807256b3a1fc`). The
+network and its weights are unchanged; the output layer's unused LSTM is left
+out. SHA-256 of the ONNX file:
+`fef3841996727fb32ed053f57a2284944a9e6cd7f8c4c7fcd1207bf049c4c6bb`.
+
+ChordMini, including its checkpoints, is published under the MIT License
+(Copyright (c) 2026 ChordMini contributors), which excludes the datasets the
+models were trained on. Some of those annotations are themselves licensed for
+non-commercial use, and whether that reaches the weights is disputed; treat
+the file as non-commercial when in doubt.
+
 ## Deep analysis models (downloaded, not committed)
 
 `tool/download-deep-models.sh` fetches ONNX conversions published by LightCut

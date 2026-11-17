@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -21,13 +22,43 @@ void main() {
 
   test('the native library loads', () {
     expect(IciclesDsp.isAvailable, isTrue);
-    expect(IciclesDsp.version, '0.7.0');
+    expect(IciclesDsp.version, '0.8.0');
   });
 
   test('bundled models resolve to the package models directory', () {
     expect(File('$modelDir/${IciclesDsp.melModelFile}').existsSync(), isTrue);
     expect(File('$modelDir/${IciclesDsp.smallModelFile}').existsSync(), isTrue);
     expect(File('$modelDir/${IciclesDsp.drumModelFile}').existsSync(), isTrue);
+    expect(File('$modelDir/${IciclesDsp.chordModelFile}').existsSync(), isTrue);
+  });
+
+  test('recognizes the chords of the synthetic progression', () async {
+    // The fixture of tool/export_chords/export_chords.py: twelve chords of
+    // two seconds each.
+    final fixture =
+        jsonDecode(File('rust/tests/fixtures/chords/progression.json').readAsStringSync()) as Map<String, Object?>;
+    final progression = (fixture['progression']! as List<Object?>).cast<List<Object?>>();
+    final bytes = File('rust/tests/fixtures/chords/progression_44100.pcm').readAsBytesSync();
+    final pcm = Int16List.view(Uint8List.fromList(bytes).buffer);
+    final mono = Float32List.fromList([for (final v in pcm) v / 32768]);
+    final analysis = await const IciclesDsp().analyze(
+      mono,
+      44100,
+      modelDir: modelDir,
+      trackBeats: false,
+      detectDrums: false,
+    );
+    expect(analysis.chordError, isNull);
+    expect(analysis.drums.isEmpty, isTrue);
+    expect(analysis.chords, hasLength(progression.length));
+    for (final (i, chord) in analysis.chords.indexed) {
+      expect(chord.root, progression[i][0], reason: '$chord');
+      expect((chord.start.inMilliseconds - 2000 * i).abs(), lessThanOrEqualTo(150), reason: '$chord');
+      expect(chord.end, greaterThan(chord.start));
+      if (i > 0) expect(chord.start, greaterThanOrEqualTo(analysis.chords[i - 1].end));
+    }
+    expect(DspChord.qualityNames[analysis.chords.first.quality], 'maj');
+    expect(DspChord.qualityNames[analysis.chords[1].quality], 'min');
   });
 
   test('detects the drums of the synthetic loop', () async {
@@ -68,6 +99,8 @@ void main() {
     expect(analysis.features.frameCount, 800);
     expect(analysis.drums.isEmpty, isTrue);
     expect(analysis.drumError, contains(IciclesDsp.drumModelFile));
+    expect(analysis.chords, isEmpty);
+    expect(analysis.chordError, contains(IciclesDsp.chordModelFile));
   });
 
   test('analyzes a generated 120 BPM click-track WAV', () async {
@@ -106,10 +139,18 @@ void main() {
         0.5 * math.sin(2 * math.pi * 220 * i / 48000) * (0.5 + 0.5 * math.sin(2 * math.pi * 0.7 * i / 48000)) +
             0.05 * (random.nextDouble() * 2 - 1),
     ]);
-    final analysis = await const IciclesDsp().analyze(signal, 48000, trackBeats: false, detectDrums: false);
+    final analysis = await const IciclesDsp().analyze(
+      signal,
+      48000,
+      trackBeats: false,
+      detectDrums: false,
+      detectChords: false,
+    );
     final reference = AudioFeatureExtractor.extract(signal, 48000);
     expect(analysis.beats, isEmpty);
     expect(analysis.drums.isEmpty, isTrue);
+    expect(analysis.chords, isEmpty);
+    expect(analysis.chordError, isNull);
     expect(analysis.features.frameCount, reference.frameCount);
     expect(analysis.features.toBytes(), reference.toBytes());
     expect(analysis.features.contentHash, reference.contentHash);

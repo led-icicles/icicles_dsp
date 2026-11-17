@@ -97,6 +97,7 @@ fn models_from_bytes_track_like_models_from_a_directory() {
         mel: &mel,
         beat: &beat,
         drum: Some(&drum),
+        chord: None,
     };
     let signal = common::click_track(120.0, 12.0, 44100);
     assert_eq!(
@@ -111,6 +112,7 @@ fn models_from_bytes_track_like_models_from_a_directory() {
         mel: &mel,
         beat: &beat,
         drum: None,
+        chord: None,
     };
     assert!(icicles_dsp::drums::detect(&signal, 44100, no_drum).is_err());
 }

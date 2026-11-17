@@ -29,13 +29,14 @@ Future<Uint8List> packageFile(String path) async {
 
 void main() {
   late IciclesDspWasm dsp;
-  late Uint8List mel, beat, drum;
+  late Uint8List mel, beat, drum, chord;
 
   setUpAll(() async {
     dsp = await IciclesDspWasm.compile(await packageFile('build/web/icicles_dsp.wasm'));
     mel = await packageFile('models/mel_spectrogram.onnx');
     beat = await packageFile('models/beat_this_small.onnx');
     drum = await packageFile('models/adtof_frame_rnn.onnx');
+    chord = await packageFile('models/btc_chords.onnx');
   });
 
   test('reproduces the native analysis of the click track', () async {
@@ -61,6 +62,33 @@ void main() {
     for (var i = 0; i < sums.length; i++) {
       expect(sums[i], closeTo(expected[i], 1e-3 * (1 + expected[i].abs())), reason: 'column $i');
     }
+  });
+
+  test('recognizes the chords of the synthetic progression', () async {
+    final fixture =
+        jsonDecode(utf8.decode(await packageFile('rust/tests/fixtures/chords/progression.json'))) as Map<String, Object?>;
+    final progression = (fixture['progression']! as List<Object?>).cast<List<Object?>>();
+    final bytes = await packageFile('rust/tests/fixtures/chords/progression_44100.pcm');
+    final pcm = Int16List.view(Uint8List.fromList(bytes).buffer);
+    final mono = Float32List.fromList([for (final v in pcm) v / 32768]);
+    final analysis = dsp.analyze(
+      mono,
+      44100,
+      mel: mel,
+      beat: beat,
+      chord: chord,
+      trackBeats: false,
+      detectDrums: false,
+    );
+    expect(analysis.chordError, isNull);
+    expect(analysis.chords, hasLength(progression.length));
+    for (final (i, found) in analysis.chords.indexed) {
+      expect(found.root, progression[i][0], reason: '$found');
+      expect((found.start.inMilliseconds - 2000 * i).abs(), lessThanOrEqualTo(150), reason: '$found');
+    }
+    final none = dsp.analyze(mono, 44100, mel: mel, beat: beat, trackBeats: false, detectDrums: false);
+    expect(none.chords, isEmpty);
+    expect(none.chordError, contains('btc_chords.onnx'));
   });
 
   test('every call runs on a fresh instance; a missing drum model fails only the drums', () {

@@ -57,6 +57,21 @@ typedef struct IciclesDspResult {
   int32_t drum_status;
   // NUL-terminated message of a failed drum detection, else NULL.
   char *drum_error;
+  // Chords (with ICICLES_DSP_DETECT_CHORDS), sorted by time and never
+  // overlapping: start and end in seconds, the root's pitch class (C = 0) and
+  // the quality (0 min, 1 maj, 2 dim, 3 aug, 4 min6, 5 maj6, 6 min7,
+  // 7 minmaj7, 8 maj7, 9 7, 10 dim7, 11 hdim7, 12 sus2, 13 sus4), chord_count
+  // of each. Stretches without a chord are gaps.
+  float *chord_starts;
+  float *chord_ends;
+  uint8_t *chord_roots;
+  uint8_t *chord_qualities;
+  size_t chord_count;
+  // Status of the chord recognition, as drum_status: a failure never fails
+  // the analysis.
+  int32_t chord_status;
+  // NUL-terminated message of a failed chord recognition, else NULL.
+  char *chord_error;
 } IciclesDspResult;
 
 // icicles_dsp_analyze flags.
@@ -65,6 +80,8 @@ enum {
   ICICLES_DSP_TRACK_BEATS = 1,
   // Detect drum hits (ADTOF).
   ICICLES_DSP_DETECT_DRUMS = 2,
+  // Recognize the chords (ChordMini BTC).
+  ICICLES_DSP_DETECT_CHORDS = 4,
 };
 
 // The library version as a static NUL-terminated string (never freed).
@@ -79,22 +96,26 @@ const char *icicles_dsp_last_error(void);
 // `model_dir` is a NUL-terminated path to the directory with the models: with
 // ICICLES_DSP_TRACK_BEATS in `flags` the Beat This! models (mel_spectrogram.onnx
 // plus beat_this.onnx or beat_this_small.onnx), with ICICLES_DSP_DETECT_DRUMS
-// the drum model (adtof_frame_rnn.onnx). A NULL `model_dir` computes the
-// features only, whatever the flags. On success `out` holds the result
-// (release it with icicles_dsp_free); on failure it is zeroed and the returned
-// IciclesDspStatus names the cause, with details in icicles_dsp_last_error. A
-// failed drum detection is not a failure: see drum_status / drum_error.
+// the drum model (adtof_frame_rnn.onnx), with ICICLES_DSP_DETECT_CHORDS the
+// chord model (btc_chords.onnx). A NULL `model_dir` computes the features
+// only, whatever the flags. On success `out` holds the result (release it with
+// icicles_dsp_free); on failure it is zeroed and the returned IciclesDspStatus
+// names the cause, with details in icicles_dsp_last_error. A failed drum
+// detection or chord recognition is not a failure: see drum_status /
+// drum_error and chord_status / chord_error.
 int32_t icicles_dsp_analyze(const float *samples, size_t len, uint32_t sample_rate, const char *model_dir,
                             uint32_t flags, IciclesDspResult *out);
 
 // Like icicles_dsp_analyze, with the models given as bytes instead of a
 // directory (the browser build has no file system): `mel`/`beat` for
-// ICICLES_DSP_TRACK_BEATS, `drum` for ICICLES_DSP_DETECT_DRUMS (a NULL `drum`
-// fails only the drum detection, reported in the result). A NULL `mel` or
-// `beat` computes the features only, whatever the flags.
+// ICICLES_DSP_TRACK_BEATS, `drum` for ICICLES_DSP_DETECT_DRUMS, `chord` for
+// ICICLES_DSP_DETECT_CHORDS (a NULL `drum` or `chord` fails only that
+// detection, reported in the result). A NULL `mel` or `beat` computes the
+// features only, whatever the flags.
 int32_t icicles_dsp_analyze_models(const float *samples, size_t len, uint32_t sample_rate, const uint8_t *mel,
                                    size_t mel_len, const uint8_t *beat, size_t beat_len, const uint8_t *drum,
-                                   size_t drum_len, uint32_t flags, IciclesDspResult *out);
+                                   size_t drum_len, const uint8_t *chord, size_t chord_len, uint32_t flags,
+                                   IciclesDspResult *out);
 
 // Allocates `len` bytes (8-aligned) in the library's memory, for a host that
 // has to write the PCM and models there (the browser); NULL for len 0.

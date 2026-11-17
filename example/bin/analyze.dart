@@ -51,7 +51,20 @@ Future<void> main(List<String> args) async {
       'drums: ${[for (final c in DrumClass.values) '${c.name} ${analysis.drums.of(c).length}'].join(', ')}'
       '${analysis.drumError == null ? '' : ' (${analysis.drumError})'}',
     )
+    ..writeln(
+      'chords: ${analysis.chords.length}'
+      '${analysis.chordError == null ? '' : ' (${analysis.chordError})'}',
+    )
     ..writeln('analysed in ${stopwatch.elapsedMilliseconds} ms');
+  if (analysis.chords.isNotEmpty) {
+    const roots = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    stdout.writeln(
+      [
+        for (final chord in analysis.chords)
+          '${_clock(chord.start)} ${roots[chord.root]}:${DspChord.qualityNames[chord.quality]}',
+      ].join('  '),
+    );
+  }
   if (analysis.beats.isNotEmpty) {
     final first = analysis.beats.take(8).map(_clock).join(', ');
     stdout.writeln('first beats: $first${analysis.beats.length > 8 ? ', …' : ''}');

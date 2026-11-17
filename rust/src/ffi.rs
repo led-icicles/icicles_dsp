@@ -12,6 +12,7 @@ use std::path::Path;
 use std::ptr;
 
 use crate::beats::{self, BeatError};
+use crate::chords::{self, Chord, ChordError};
 use crate::deep::{self, Control, DeepError, DeepModels};
 use crate::drums::{self, DrumError, DrumHit};
 use crate::features::{self, FeatureError, COLUMN_COUNT, HOP_MICROS};
@@ -69,6 +70,21 @@ pub struct IciclesDspResult {
     pub drum_status: i32,
     /// NUL-terminated message of a failed drum detection, else NULL.
     pub drum_error: *mut c_char,
+    /// Chords (with [`ICICLES_DSP_DETECT_CHORDS`]), sorted by time and never
+    /// overlapping: start and end in seconds, the root's pitch class (C = 0)
+    /// and the quality (0 min, 1 maj, 2 dim, 3 aug, 4 min6, 5 maj6, 6 min7,
+    /// 7 minmaj7, 8 maj7, 9 7, 10 dim7, 11 hdim7, 12 sus2, 13 sus4),
+    /// `chord_count` of each. Stretches without a chord are gaps.
+    pub chord_starts: *mut f32,
+    pub chord_ends: *mut f32,
+    pub chord_roots: *mut u8,
+    pub chord_qualities: *mut u8,
+    pub chord_count: usize,
+    /// Status of the chord recognition, as `drum_status`: a failure never
+    /// fails the analysis.
+    pub chord_status: i32,
+    /// NUL-terminated message of a failed chord recognition, else NULL.
+    pub chord_error: *mut c_char,
 }
 
 impl IciclesDspResult {
@@ -87,6 +103,13 @@ impl IciclesDspResult {
         drum_count: 0,
         drum_status: 0,
         drum_error: ptr::null_mut(),
+        chord_starts: ptr::null_mut(),
+        chord_ends: ptr::null_mut(),
+        chord_roots: ptr::null_mut(),
+        chord_qualities: ptr::null_mut(),
+        chord_count: 0,
+        chord_status: 0,
+        chord_error: ptr::null_mut(),
     };
 }
 
@@ -146,18 +169,22 @@ pub extern "C" fn icicles_dsp_last_error() -> *const c_char {
 pub const ICICLES_DSP_TRACK_BEATS: u32 = 1;
 /// [`icicles_dsp_analyze`] flag: detect drum hits (ADTOF).
 pub const ICICLES_DSP_DETECT_DRUMS: u32 = 2;
+/// [`icicles_dsp_analyze`] flag: recognize the chords (ChordMini BTC).
+pub const ICICLES_DSP_DETECT_CHORDS: u32 = 4;
 
 /// Analyses `len` mono f32 samples (`-1..1`) at `sample_rate` Hz.
 ///
 /// `model_dir` is a NUL-terminated path to the directory with the models:
 /// with [`ICICLES_DSP_TRACK_BEATS`] in `flags` the Beat This! models
 /// (`mel_spectrogram.onnx` plus `beat_this.onnx` or `beat_this_small.onnx`),
-/// with [`ICICLES_DSP_DETECT_DRUMS`] the drum model (`adtof_frame_rnn.onnx`).
+/// with [`ICICLES_DSP_DETECT_DRUMS`] the drum model (`adtof_frame_rnn.onnx`),
+/// with [`ICICLES_DSP_DETECT_CHORDS`] the chord model (`btc_chords.onnx`).
 /// A NULL `model_dir` computes the features only, whatever the flags. On
 /// success `out` holds the result (release it with [`icicles_dsp_free`]); on
 /// failure it is zeroed and the status names the cause, with details in
-/// [`icicles_dsp_last_error`]. A failed drum detection is not a failure: it
-/// is reported in `drum_status` / `drum_error` of the result.
+/// [`icicles_dsp_last_error`]. A failed drum detection or chord recognition
+/// is not a failure: it is reported in `drum_status` / `drum_error` and
+/// `chord_status` / `chord_error` of the result.
 ///
 /// # Safety
 /// `samples` must point to `len` readable `f32`s and `out` to a writable
@@ -186,8 +213,9 @@ pub unsafe extern "C" fn icicles_dsp_analyze(
 
 /// Like [`icicles_dsp_analyze`], with the models given as bytes instead of a
 /// directory (the browser build has no file system): `mel`/`beat` are needed
-/// with [`ICICLES_DSP_TRACK_BEATS`], `drum` with [`ICICLES_DSP_DETECT_DRUMS`]
-/// (a NULL `drum` fails only the drum detection, reported in the result).
+/// with [`ICICLES_DSP_TRACK_BEATS`], `drum` with [`ICICLES_DSP_DETECT_DRUMS`],
+/// `chord` with [`ICICLES_DSP_DETECT_CHORDS`] (a NULL `drum` or `chord` fails
+/// only that detection, reported in the result).
 /// A NULL `mel` or `beat` computes the features only, whatever the flags.
 ///
 /// # Safety
@@ -205,6 +233,8 @@ pub unsafe extern "C" fn icicles_dsp_analyze_models(
     beat_len: usize,
     drum: *const u8,
     drum_len: usize,
+    chord: *const u8,
+    chord_len: usize,
     flags: u32,
     out: *mut IciclesDspResult,
 ) -> i32 {
@@ -223,6 +253,7 @@ pub unsafe extern "C" fn icicles_dsp_analyze_models(
                     mel,
                     beat,
                     drum: bytes(drum, drum_len),
+                    chord: bytes(chord, chord_len),
                 }),
                 _ => None,
             };
@@ -363,6 +394,13 @@ fn analyze(
             Err(e) => DrumArrays::new(Vec::new(), Some(&e)),
         },
     };
+    let chords = match models.filter(|_| flags & ICICLES_DSP_DETECT_CHORDS != 0) {
+        None => ChordArrays::new(Vec::new(), None),
+        Some(models) => match chords::detect(signal, sample_rate, models) {
+            Ok(chords) => ChordArrays::new(chords, None),
+            Err(e) => ChordArrays::new(Vec::new(), Some(&e)),
+        },
+    };
     let (beat_ptr, beat_count) = give_away(beats.beats);
     let (downbeat_ptr, downbeat_count) = give_away(beats.downbeats);
     let (feature_ptr, _) = give_away(features.data);
@@ -381,7 +419,74 @@ fn analyze(
         drum_count: drums.count,
         drum_status: drums.status,
         drum_error: drums.error,
+        chord_starts: chords.starts,
+        chord_ends: chords.ends,
+        chord_roots: chords.roots,
+        chord_qualities: chords.qualities,
+        chord_count: chords.count,
+        chord_status: chords.status,
+        chord_error: chords.error,
     })
+}
+
+/// Chords as the C arrays of a result (see `IciclesDspResult::chord_starts`).
+struct ChordArrays {
+    starts: *mut f32,
+    ends: *mut f32,
+    roots: *mut u8,
+    qualities: *mut u8,
+    count: usize,
+    status: i32,
+    error: *mut c_char,
+}
+
+impl ChordArrays {
+    /// The arrays of `chords`; with `error` the status and message of a
+    /// failed recognition.
+    fn new(chords: Vec<Chord>, error: Option<&ChordError>) -> Self {
+        let (status, error) = match error {
+            None => (IciclesDspStatus::Ok, ptr::null_mut()),
+            Some(e) => {
+                let status = match e {
+                    ChordError::ModelNotFound(_) => IciclesDspStatus::ModelNotFound,
+                    ChordError::ModelLoad(_) => IciclesDspStatus::ModelLoadFailed,
+                    ChordError::Analysis(_) => IciclesDspStatus::AnalysisFailed,
+                };
+                let message = CString::new(e.to_string())
+                    .unwrap_or_else(|_| CString::new("chord recognition failed").expect("literal"));
+                (status, message.into_raw())
+            }
+        };
+        let count = chords.len();
+        let (starts, _) = give_away(chords.iter().map(|c| c.start).collect());
+        let (ends, _) = give_away(chords.iter().map(|c| c.end).collect());
+        let (roots, _) = give_away(chords.iter().map(|c| c.root).collect());
+        let (qualities, _) = give_away(chords.iter().map(|c| c.quality).collect());
+        ChordArrays {
+            starts,
+            ends,
+            roots,
+            qualities,
+            count,
+            status: status as i32,
+            error,
+        }
+    }
+
+    /// Releases the arrays of a result's chords.
+    ///
+    /// # Safety
+    /// The pointers must come from `ChordArrays::new` (via `result`) and not
+    /// have been freed.
+    unsafe fn free(result: &IciclesDspResult) {
+        take_back(result.chord_starts, result.chord_count);
+        take_back(result.chord_ends, result.chord_count);
+        take_back(result.chord_roots, result.chord_count);
+        take_back(result.chord_qualities, result.chord_count);
+        if !result.chord_error.is_null() {
+            drop(CString::from_raw(result.chord_error));
+        }
+    }
 }
 
 /// Drum hits as the C arrays of a result (see `IciclesDspResult::drum_times`).
@@ -471,6 +576,7 @@ pub unsafe extern "C" fn icicles_dsp_free(out: *mut IciclesDspResult) {
             result.drum_count,
             result.drum_error,
         );
+        ChordArrays::free(&result);
         ptr::write(out, IciclesDspResult::EMPTY);
     }));
 }
@@ -857,6 +963,102 @@ mod tests {
         assert!(out.features.is_null());
     }
 
+    /// A sustained C major triad with a C bass, 6 s.
+    fn c_major() -> Vec<f32> {
+        let sr = 44_100usize;
+        (0..sr * 6)
+            .map(|i| {
+                let t = i as f64 / sr as f64;
+                [65.406, 261.626, 329.628, 391.995]
+                    .iter()
+                    .flat_map(|hz| (1..5).map(move |h| (hz * f64::from(h), 0.2 / f64::from(h))))
+                    .map(|(hz, gain)| gain * (2.0 * std::f64::consts::PI * hz * t).sin())
+                    .sum::<f64>() as f32
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recognizes_chords_with_the_bundled_model() {
+        let signal = c_major();
+        let dir = CString::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../models")).unwrap();
+        let mut out = IciclesDspResult::EMPTY;
+        let status = unsafe {
+            icicles_dsp_analyze(
+                signal.as_ptr(),
+                signal.len(),
+                44100,
+                dir.as_ptr(),
+                ICICLES_DSP_DETECT_CHORDS,
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::Ok as i32, "{}", last_error());
+        assert_eq!(out.chord_status, IciclesDspStatus::Ok as i32);
+        assert!(out.chord_error.is_null());
+        assert_eq!(out.drum_count, 0, "drums were not requested");
+        assert_eq!(out.chord_count, 1);
+        let starts = unsafe { std::slice::from_raw_parts(out.chord_starts, out.chord_count) };
+        let ends = unsafe { std::slice::from_raw_parts(out.chord_ends, out.chord_count) };
+        let roots = unsafe { std::slice::from_raw_parts(out.chord_roots, out.chord_count) };
+        let qualities = unsafe { std::slice::from_raw_parts(out.chord_qualities, out.chord_count) };
+        assert_eq!((roots[0], qualities[0]), (0, 1), "C major");
+        assert!(starts[0] < 0.5 && ends[0] > 5.5, "{starts:?} {ends:?}");
+        unsafe { icicles_dsp_free(&mut out) };
+        assert!(out.chord_starts.is_null());
+        assert_eq!(out.chord_count, 0);
+    }
+
+    #[test]
+    fn missing_chord_model_does_not_fail_the_analysis() {
+        let signal = c_major();
+        let dir = std::env::temp_dir().join("icicles_dsp_ffi_no_chord_model");
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = CString::new(dir.to_str().unwrap()).unwrap();
+        let mut out = IciclesDspResult::EMPTY;
+        let status = unsafe {
+            icicles_dsp_analyze(
+                signal.as_ptr(),
+                signal.len(),
+                44100,
+                dir.as_ptr(),
+                ICICLES_DSP_DETECT_CHORDS,
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::Ok as i32, "{}", last_error());
+        assert_eq!(out.chord_status, IciclesDspStatus::ModelNotFound as i32);
+        assert_eq!(out.chord_count, 0);
+        let message = unsafe { CStr::from_ptr(out.chord_error) }.to_string_lossy();
+        assert!(message.contains("btc_chords.onnx"), "{message}");
+        assert!(out.feature_rows > 0);
+        unsafe { icicles_dsp_free(&mut out) };
+        assert!(out.chord_error.is_null());
+
+        // The same through the byte entry point, without chord bytes: no
+        // beat models either, so the features alone come back.
+        let status = unsafe {
+            icicles_dsp_analyze_models(
+                signal.as_ptr(),
+                signal.len(),
+                44100,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ICICLES_DSP_DETECT_CHORDS,
+                &mut out,
+            )
+        };
+        assert_eq!(status, IciclesDspStatus::Ok as i32, "{}", last_error());
+        assert_eq!(out.chord_count, 0);
+        unsafe { icicles_dsp_free(&mut out) };
+    }
+
     #[test]
     fn detects_drums_with_the_bundled_model() {
         // Kicks every 0.5 s from 0.25 s: decaying 60 Hz bursts.
@@ -1123,7 +1325,9 @@ pub unsafe extern "C" fn icicles_dsp_transcode_vorbis(
         return IciclesDspStatus::InvalidArgument as i32;
     }
     let file = std::slice::from_raw_parts(bytes, len);
-    match catch_unwind(AssertUnwindSafe(|| crate::encode::transcode_vorbis(file, start, length, quality))) {
+    match catch_unwind(AssertUnwindSafe(|| {
+        crate::encode::transcode_vorbis(file, start, length, quality)
+    })) {
         Ok(Ok(encoded)) => {
             let (pointer, length) = give_away(encoded);
             ptr::write(out, pointer);

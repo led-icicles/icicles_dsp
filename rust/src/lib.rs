@@ -1,12 +1,13 @@
 //! Native audio analysis for icicles animations.
 //!
-//! Three analyses over one mono PCM signal:
+//! Four analyses over one mono PCM signal:
 //! - [`features`]: the `icicles_generators` `AudioFeatures` matrix (one row of
 //!   22 values every 10 ms), a port of the Dart `AudioFeatureExtractor`;
 //! - [`beats`]: Beat This! beat and downbeat tracking through the `beat-this`
 //!   crate (pure-Rust `rten` inference, no system libraries);
 //! - [`drums`]: drum hits (kick, snare, toms, hi-hat, cymbals) with the ADTOF
-//!   model on the same runtime.
+//!   model on the same runtime;
+//! - [`chords`]: the chords of the song with the ChordMini BTC model.
 //!
 //! [`ffi`] exposes them behind a C ABI — for `dart:ffi` on the desktop and
 //! for the browser through the `wasm32-unknown-unknown` build, where the
@@ -14,6 +15,7 @@
 //! directly as well.
 
 pub mod beats;
+pub mod chords;
 pub mod decode;
 pub mod deep;
 pub mod demucs;

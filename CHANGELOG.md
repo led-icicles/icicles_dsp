@@ -1,3 +1,21 @@
+## 0.8.0
+
+- Chord recognition: `rust/src/chords.rs` runs the ChordMini BTC model (`models/btc_chords.onnx`, ~13 MB, exported by
+  `tool/export_chords/export_chords.py`) over a constant-Q front end that follows `librosa.cqt` 0.10.1 (144 bins, 24
+  per octave from C1, a column every 2048 samples at 22.05 kHz; a recursive octave-by-octave transform with this
+  crate's own halving filter) — the frame labels equal the librosa/PyTorch reference on the fixture and on real songs.
+  Windows of 108 columns every 54, logits averaged and smoothed (Gaussian of 9 columns), chords shorter than ~0.5 s
+  join a neighbour. About a second for a four-minute song.
+- C ABI: flag `ICICLES_DSP_DETECT_CHORDS` (4); `chord_starts` / `chord_ends` / `chord_roots` / `chord_qualities` /
+  `chord_count` / `chord_status` / `chord_error` at the end of `IciclesDspResult`; `icicles_dsp_analyze_models` takes
+  the model as `chord`/`chord_len` before `flags`. Optional like the drum model: a missing model or a failed
+  recognition only leaves the chords empty. `ModelSource::Bytes` has a `chord` field.
+- Dart: `DspAnalysis.chords` (`List<DspChord>`: start, end, root pitch class, quality index into
+  `DspChord.qualityNames`) and `chordError`; `IciclesDsp.chordModelFile`, `analyze(detectChords:)` (default on);
+  `DspResultData` carries the chord arrays (optional, so older wires still read); `dspFlags(detectChords:)`;
+  `IciclesDspWasm.analyze(chord:, detectChords:)`.
+- `rust/examples/chord_labels.rs` prints the frame labels of a PCM file (for parity checks against the reference).
+
 ## 0.7.0
 
 - Audio transcoding: `IciclesDsp().transcodeVorbis(bytes, {start, length, quality})` / `transcodeVorbisSync` and

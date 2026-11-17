@@ -24,11 +24,13 @@ external ffi.Pointer<ffi.Char> icicles_dsp_last_error();
 /// `model_dir` is a NUL-terminated path to the directory with the models: with
 /// ICICLES_DSP_TRACK_BEATS in `flags` the Beat This! models (mel_spectrogram.onnx
 /// plus beat_this.onnx or beat_this_small.onnx), with ICICLES_DSP_DETECT_DRUMS
-/// the drum model (adtof_frame_rnn.onnx). A NULL `model_dir` computes the
-/// features only, whatever the flags. On success `out` holds the result
-/// (release it with icicles_dsp_free); on failure it is zeroed and the returned
-/// IciclesDspStatus names the cause, with details in icicles_dsp_last_error. A
-/// failed drum detection is not a failure: see drum_status / drum_error.
+/// the drum model (adtof_frame_rnn.onnx), with ICICLES_DSP_DETECT_CHORDS the
+/// chord model (btc_chords.onnx). A NULL `model_dir` computes the features
+/// only, whatever the flags. On success `out` holds the result (release it with
+/// icicles_dsp_free); on failure it is zeroed and the returned IciclesDspStatus
+/// names the cause, with details in icicles_dsp_last_error. A failed drum
+/// detection or chord recognition is not a failure: see drum_status /
+/// drum_error and chord_status / chord_error.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Pointer<ffi.Float>,
@@ -50,14 +52,17 @@ external int icicles_dsp_analyze(
 
 /// Like icicles_dsp_analyze, with the models given as bytes instead of a
 /// directory (the browser build has no file system): `mel`/`beat` for
-/// ICICLES_DSP_TRACK_BEATS, `drum` for ICICLES_DSP_DETECT_DRUMS (a NULL `drum`
-/// fails only the drum detection, reported in the result). A NULL `mel` or
-/// `beat` computes the features only, whatever the flags.
+/// ICICLES_DSP_TRACK_BEATS, `drum` for ICICLES_DSP_DETECT_DRUMS, `chord` for
+/// ICICLES_DSP_DETECT_CHORDS (a NULL `drum` or `chord` fails only that
+/// detection, reported in the result). A NULL `mel` or `beat` computes the
+/// features only, whatever the flags.
 @ffi.Native<
   ffi.Int32 Function(
     ffi.Pointer<ffi.Float>,
     ffi.Size,
     ffi.Uint32,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
     ffi.Pointer<ffi.Uint8>,
     ffi.Size,
     ffi.Pointer<ffi.Uint8>,
@@ -78,6 +83,8 @@ external int icicles_dsp_analyze_models(
   int beat_len,
   ffi.Pointer<ffi.Uint8> drum,
   int drum_len,
+  ffi.Pointer<ffi.Uint8> chord,
+  int chord_len,
   int flags,
   ffi.Pointer<IciclesDspResult> out,
 );
@@ -308,6 +315,30 @@ final class IciclesDspResult extends ffi.Struct {
 
   /// NUL-terminated message of a failed drum detection, else NULL.
   external ffi.Pointer<ffi.Char> drum_error;
+
+  /// Chords (with ICICLES_DSP_DETECT_CHORDS), sorted by time and never
+  /// overlapping: start and end in seconds, the root's pitch class (C = 0) and
+  /// the quality (0 min, 1 maj, 2 dim, 3 aug, 4 min6, 5 maj6, 6 min7,
+  /// 7 minmaj7, 8 maj7, 9 7, 10 dim7, 11 hdim7, 12 sus2, 13 sus4), chord_count
+  /// of each. Stretches without a chord are gaps.
+  external ffi.Pointer<ffi.Float> chord_starts;
+
+  external ffi.Pointer<ffi.Float> chord_ends;
+
+  external ffi.Pointer<ffi.Uint8> chord_roots;
+
+  external ffi.Pointer<ffi.Uint8> chord_qualities;
+
+  @ffi.Size()
+  external int chord_count;
+
+  /// Status of the chord recognition, as drum_status: a failure never fails
+  /// the analysis.
+  @ffi.Int32()
+  external int chord_status;
+
+  /// NUL-terminated message of a failed chord recognition, else NULL.
+  external ffi.Pointer<ffi.Char> chord_error;
 }
 
 /// Progress and cancellation of a deep analysis, shared with another thread:
@@ -374,3 +405,5 @@ final class IciclesDspDeepResult extends ffi.Struct {
 const int ICICLES_DSP_TRACK_BEATS = 1;
 
 const int ICICLES_DSP_DETECT_DRUMS = 2;
+
+const int ICICLES_DSP_DETECT_CHORDS = 4;

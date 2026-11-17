@@ -37,25 +37,30 @@ final class IciclesDspWasm {
 
   /// Analyses [mono] PCM (`-1..1`) at [sampleRate] Hz with the models'
   /// bytes: [mel] and [beat] (the Beat This! front end and beat model) for
-  /// [trackBeats], [drum] (ADTOF) for [detectDrums]. Without a [drum] model
-  /// the drum detection fails on its own ([DspAnalysis.drumError]), never
-  /// the analysis. Throws [DspException].
+  /// [trackBeats], [drum] (ADTOF) for [detectDrums], [chord] (ChordMini BTC)
+  /// for [detectChords]. Without a [drum] or [chord] model that detection
+  /// fails on its own ([DspAnalysis.drumError], [DspAnalysis.chordError]),
+  /// never the analysis. Throws [DspException].
   DspAnalysis analyze(
     Float32List mono,
     int sampleRate, {
     required Uint8List mel,
     required Uint8List beat,
     Uint8List? drum,
+    Uint8List? chord,
     bool trackBeats = true,
     bool detectDrums = true,
+    bool detectChords = true,
   }) => analyzeData(
     mono,
     sampleRate,
     mel: mel,
     beat: beat,
     drum: drum,
+    chord: chord,
     trackBeats: trackBeats,
     detectDrums: detectDrums,
+    detectChords: detectChords,
   ).toAnalysis();
 
   /// [analyze] as the raw result arrays, e.g. to send them from a Web Worker
@@ -66,12 +71,21 @@ final class IciclesDspWasm {
     required Uint8List mel,
     required Uint8List beat,
     Uint8List? drum,
+    Uint8List? chord,
     bool trackBeats = true,
     bool detectDrums = true,
+    bool detectChords = true,
   }) {
     if (mono.isEmpty) throw const DspException(DspErrorKind.invalidArgument, 'The signal is empty.');
-    return _Instance(this)
-        .analyze(mono, sampleRate, mel, beat, drum, dspFlags(trackBeats: trackBeats, detectDrums: detectDrums));
+    return _Instance(this).analyze(
+      mono,
+      sampleRate,
+      mel,
+      beat,
+      drum,
+      chord,
+      dspFlags(trackBeats: trackBeats, detectDrums: detectDrums, detectChords: detectChords),
+    );
   }
 
   /// The deep analysis (Demucs stems → stem loudness, chroma, drum hits of
@@ -138,12 +152,21 @@ final class _Instance {
     return pointer;
   }
 
-  DspResultData analyze(Float32List mono, int sampleRate, Uint8List mel, Uint8List beat, Uint8List? drum, int flags) {
+  DspResultData analyze(
+    Float32List mono,
+    int sampleRate,
+    Uint8List mel,
+    Uint8List beat,
+    Uint8List? drum,
+    Uint8List? chord,
+    int flags,
+  ) {
     final int status;
     final int out;
     try {
       final samples = _put(mono.buffer.asUint8List(mono.offsetInBytes, mono.lengthInBytes));
       final melAt = _put(mel), beatAt = _put(beat), drumAt = drum == null ? 0 : _put(drum);
+      final chordAt = chord == null ? 0 : _put(chord);
       out = _u32(_exports.alloc(_resultSize));
       status = _exports.analyzeModels(
         samples,
@@ -155,6 +178,8 @@ final class _Instance {
         beat.length,
         drumAt,
         drum?.length ?? 0,
+        chordAt,
+        chord?.length ?? 0,
         flags,
         out,
       );
@@ -285,7 +310,9 @@ final class _Instance {
     final buffer = _exports.memory.buffer.toDart;
     Float32List floats(int pointer, int count) =>
         count == 0 ? Float32List(0) : Float32List.fromList(buffer.asFloat32List(pointer, count));
-    final drumCount = u(11);
+    Uint8List bytes(int pointer, int count) =>
+        count == 0 ? Uint8List(0) : Uint8List.fromList(buffer.asUint8List(pointer, count));
+    final drumCount = u(11), chordCount = u(18);
     return DspResultData(
       beats: floats(u(0), u(1)),
       downbeats: floats(u(2), u(3)),
@@ -294,14 +321,20 @@ final class _Instance {
       featureColumns: u(6),
       featureHopMicros: u(7),
       drumTimes: floats(u(8), drumCount),
-      drumClasses: drumCount == 0 ? Uint8List(0) : Uint8List.fromList(buffer.asUint8List(u(9), drumCount)),
+      drumClasses: bytes(u(9), drumCount),
       drumStrengths: floats(u(10), drumCount),
       drumError: _cString(u(13)),
+      chordStarts: floats(u(14), chordCount),
+      chordEnds: floats(u(15), chordCount),
+      chordRoots: bytes(u(16), chordCount),
+      chordQualities: bytes(u(17), chordCount),
+      chordError: _cString(u(20)),
     );
   }
 
-  /// `sizeof(IciclesDspResult)` on wasm32: 12 pointer-sized fields, 2 × u32/i32.
-  static const _resultSize = 56;
+  /// `sizeof(IciclesDspResult)` on wasm32: 21 fields of 4 bytes (pointers,
+  /// `usize`, u32/i32).
+  static const _resultSize = 84;
 
   String? _cString(int pointer) {
     if (pointer == 0) return null;
@@ -462,6 +495,8 @@ extension type _Exports._(JSObject _) implements JSObject {
     int beatLength,
     int drum,
     int drumLength,
+    int chord,
+    int chordLength,
     int flags,
     int out,
   );

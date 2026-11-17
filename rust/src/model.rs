@@ -18,12 +18,13 @@ use rten_tensor::Layout;
 pub enum ModelSource<'a> {
     /// A directory with the model files (desktop).
     Dir(&'a Path),
-    /// The model files' bytes (browser). `drum` is `None` when the drum model
-    /// was not provided.
+    /// The model files' bytes (browser). `drum` and `chord` are `None` when
+    /// that model was not provided.
     Bytes {
         mel: &'a [u8],
         beat: &'a [u8],
         drum: Option<&'a [u8]>,
+        chord: Option<&'a [u8]>,
     },
 }
 
